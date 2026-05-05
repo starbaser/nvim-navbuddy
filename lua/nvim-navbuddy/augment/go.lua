@@ -66,9 +66,18 @@ function M.augment(bufnr, root_node)
   -- Temporary table to hold children before linking
   -- Structure: func_node_ref -> { child1, child2, ... }
   local new_children_map = {}
+  local seen = {} -- deduplicate by (line, character) key
 
   for _, node, _ in query:iter_captures(root, bufnr, 0, -1) do
     local start_row, start_col, end_row, end_col = node:range()
+
+    -- Same position can match multiple query patterns
+    local key = string.format("%d:%d", start_row, start_col)
+    if seen[key] then
+      goto continue
+    end
+    seen[key] = true
+
     local name = ts.get_node_text(node, bufnr)
 
     -- Convert TS 0-based to Navic 1-based line representation
@@ -98,6 +107,7 @@ function M.augment(bufnr, root_node)
       end
       table.insert(new_children_map[parent_func], synthetic_node)
     end
+    ::continue::
   end
 
   -- Wire up the doubly-linked list for navbuddy integration
