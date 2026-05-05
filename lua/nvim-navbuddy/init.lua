@@ -25,7 +25,6 @@
 ---@tag navbuddy-requirements
 ---@toc_entry Requirements
 
-
 ---@text INSTALLATION
 --- >lua
 ---   -- lazy.nvim
@@ -343,6 +342,10 @@ local function request(for_buf, handler, opts)
     navic.request_symbol(for_buf, function(bufnr, symbols)
       navic.update_data(bufnr, symbols)
       navic.update_context(bufnr)
+      local tree = require("nvim-navic.lib").get_tree(bufnr)
+      if tree then
+        require("nvim-navbuddy.augment").augment(bufnr, tree, vim.bo[bufnr].filetype)
+      end
       local context_data = navic.get_context_data(bufnr)
 
       local curr_node = context_data[#context_data]
