@@ -365,10 +365,16 @@ function actions.append_scope()
   }
 end
 
---- Trigger lsp rename for current node.
+--- Trigger lsp rename for currently focused node.
 function actions.rename()
   local callback = function(display)
+    local target_win = display.for_win
     display:close()
+    vim.api.nvim_win_set_cursor(
+      target_win,
+      { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
+    )
+    vim.api.nvim_set_current_win(target_win)
     vim.lsp.buf.rename()
   end
 
