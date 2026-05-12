@@ -607,21 +607,6 @@ function actions.move_up()
   }
 end
 
-function actions.toggle_preview()
-  local callback = function(display)
-    if vim.api.nvim_win_get_buf(display.right.winid) == display.right.bufnr then
-      display:show_preview()
-    else
-      display:hide_preview()
-    end
-  end
-
-  return {
-    callback = callback,
-    description = "Show preview of current node",
-  }
-end
-
 --- Opens vertical split with currently selected node.
 --- Will not remember top line like |winsaveview()| does.
 --- NOTE: Direction of split is controlled by 'splitright'
@@ -744,13 +729,14 @@ function actions.help()
     )
     table.insert(lines, 2, string.rep("-", vim.api.nvim_win_get_width(help_popup.winid)))
 
-    vim.api.nvim_buf_set_option(help_popup.bufnr, "modifiable", true)
+    vim.bo[help_popup.bufnr].modifiable = true
     vim.api.nvim_buf_set_lines(help_popup.bufnr, 0, -1, false, lines)
-    vim.api.nvim_buf_set_option(help_popup.bufnr, "modifiable", false)
+    vim.bo[help_popup.bufnr].modifiable = false
 
-    vim.api.nvim_buf_add_highlight(help_popup.bufnr, -1, "NavbuddyFunction", 0, 0, -1)
+    local help_ns = vim.api.nvim_create_namespace("nvim-navbuddy-help")
+    vim.hl.range(help_popup.bufnr, help_ns, "NavbuddyFunction", { 0, 0 }, { 0, -1 })
     for i = 2, #lines do
-      vim.api.nvim_buf_add_highlight(help_popup.bufnr, -1, "NavbuddyKey", i - 1, 0, max_keybinding_len + 3)
+      vim.hl.range(help_popup.bufnr, help_ns, "NavbuddyKey", { i - 1, 0 }, { i - 1, max_keybinding_len + 3 })
     end
   end
 

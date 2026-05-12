@@ -1,35 +1,72 @@
 local navic = require("nvim-navic.lib")
 
-local nui_popup = require("nui.popup")
-local nui_layout = require("nui.layout")
-local nui_text = require("nui.text")
-
 local ui = require("nvim-navbuddy.ui")
 
 local ns = vim.api.nvim_create_namespace("nvim-navbuddy")
 
-local function clear_buffer(buf)
-  vim.api.nvim_win_set_buf(buf.winid, buf.bufnr)
+local function resolve_pct(spec, total)
+  if type(spec) == "number" then
+    return spec
+  end
+  if type(spec) == "string" then
+    local pct = spec:match("^(%d+)%%$")
+    if pct then
+      return math.floor(total * tonumber(pct) / 100)
+    end
+    local int = spec:match("^(%d+)$")
+    if int then
+      return tonumber(int)
+    end
+  end
+  error("navbuddy: invalid size " .. vim.inspect(spec))
+end
 
-  vim.api.nvim_win_set_option(buf.winid, "signcolumn", "no")
-  vim.api.nvim_win_set_option(buf.winid, "foldlevel", 100)
-  vim.api.nvim_win_set_option(buf.winid, "wrap", true)
+local function configure_pane(winid, section_cfg, opts)
+  local bufnr = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_win_set_buf(winid, bufnr)
+  vim.bo[bufnr].bufhidden = "wipe"
+  vim.bo[bufnr].buftype = "nofile"
+  vim.bo[bufnr].swapfile = false
+  vim.bo[bufnr].modifiable = false
+  if opts.filetype then
+    vim.bo[bufnr].filetype = opts.filetype
+  end
+  vim.wo[winid].number = false
+  vim.wo[winid].relativenumber = false
+  vim.wo[winid].signcolumn = "no"
+  vim.wo[winid].foldcolumn = "0"
+  vim.wo[winid].wrap = true
+  vim.wo[winid].cursorline = false
+  vim.wo[winid].winhighlight = "Normal:NavbuddyNormalFloat"
+  vim.wo[winid].winfixheight = true
+  vim.wo[winid].winfixwidth = true
+  for k, v in pairs(section_cfg.win_options or {}) do
+    vim.wo[winid][k] = v
+  end
+  for k, v in pairs(section_cfg.buf_options or {}) do
+    vim.bo[bufnr][k] = v
+  end
+  return { winid = winid, bufnr = bufnr }
+end
 
-  vim.api.nvim_buf_set_option(buf.bufnr, "modifiable", true)
-  vim.api.nvim_buf_set_lines(buf.bufnr, 0, -1, false, {})
-  vim.api.nvim_buf_set_option(buf.bufnr, "modifiable", false)
-  for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(buf.bufnr, ns, 0, -1, {})) do
-    vim.api.nvim_buf_del_extmark(buf.bufnr, ns, extmark[1])
+local function clear_buffer(pane)
+  vim.api.nvim_win_set_buf(pane.winid, pane.bufnr)
+
+  vim.wo[pane.winid].signcolumn = "no"
+  vim.wo[pane.winid].foldlevel = 100
+  vim.wo[pane.winid].wrap = true
+
+  vim.bo[pane.bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(pane.bufnr, 0, -1, false, {})
+  vim.bo[pane.bufnr].modifiable = false
+  for _, extmark in ipairs(vim.api.nvim_buf_get_extmarks(pane.bufnr, ns, 0, -1, {})) do
+    vim.api.nvim_buf_del_extmark(pane.bufnr, ns, extmark[1])
   end
 end
 
-local merge = function(...)
-  return vim.tbl_deep_extend("force", ...)
-end
-
-local function fill_buffer(buf, node, config)
-  local cursor_pos = vim.api.nvim_win_get_cursor(buf.winid)
-  clear_buffer(buf)
+local function fill_buffer(pane, node, config)
+  local cursor_pos = vim.api.nvim_win_get_cursor(pane.winid)
+  clear_buffer(pane)
 
   local parent = node.parent
 
@@ -39,9 +76,9 @@ local function fill_buffer(buf, node, config)
     table.insert(lines, text)
   end
 
-  vim.api.nvim_buf_set_option(buf.bufnr, "modifiable", true)
-  vim.api.nvim_buf_set_lines(buf.bufnr, 0, -1, false, lines)
-  vim.api.nvim_buf_set_option(buf.bufnr, "modifiable", false)
+  vim.bo[pane.bufnr].modifiable = true
+  vim.api.nvim_buf_set_lines(pane.bufnr, 0, -1, false, lines)
+  vim.bo[pane.bufnr].modifiable = false
 
   if cursor_pos[1] ~= node.index then
     cursor_pos[1] = node.index
@@ -49,9 +86,9 @@ local function fill_buffer(buf, node, config)
 
   for i, child_node in ipairs(parent.children) do
     local hl_group = "Navbuddy" .. navic.adapt_lsp_num_to_str(child_node.kind)
-    vim.api.nvim_buf_add_highlight(buf.bufnr, ns, hl_group, i - 1, 0, -1)
+    vim.hl.range(pane.bufnr, ns, hl_group, { i - 1, 0 }, { i - 1, -1 })
     if config.node_markers.enabled then
-      vim.api.nvim_buf_set_extmark(buf.bufnr, ns, i - 1, #lines[i], {
+      vim.api.nvim_buf_set_extmark(pane.bufnr, ns, i - 1, #lines[i], {
         virt_text = {
           {
             child_node.children ~= nil and config.node_markers.icons.branch
@@ -66,13 +103,13 @@ local function fill_buffer(buf, node, config)
     end
   end
 
-  vim.api.nvim_buf_add_highlight(buf.bufnr, ns, "NavbuddyCursorLine", cursor_pos[1] - 1, 0, -1)
-  vim.api.nvim_buf_set_extmark(buf.bufnr, ns, cursor_pos[1] - 1, #lines[cursor_pos[1]], {
+  vim.hl.range(pane.bufnr, ns, "NavbuddyCursorLine", { cursor_pos[1] - 1, 0 }, { cursor_pos[1] - 1, -1 })
+  vim.api.nvim_buf_set_extmark(pane.bufnr, ns, cursor_pos[1] - 1, #lines[cursor_pos[1]], {
     end_row = cursor_pos[1],
     hl_eol = true,
     hl_group = "NavbuddyCursorLine" .. navic.adapt_lsp_num_to_str(node.kind),
   })
-  vim.api.nvim_win_set_cursor(buf.winid, cursor_pos)
+  vim.api.nvim_win_set_cursor(pane.winid, cursor_pos)
 end
 
 ---@private
@@ -89,6 +126,7 @@ end
 ---@field leaving_window_for_action boolean
 ---@field leaving_window_for_reorientation boolean
 ---@field closed boolean
+---@field original_win integer
 ---@field source_buffer_scrolloff? number
 ---@field user_gui_cursor? string
 
@@ -100,10 +138,8 @@ end
 ---@field for_win number
 ---@field start_cursor integer[] # (row, col) tuple
 ---@field focus_node Navbuddy.symbolNode
----@field layout NuiLayout
----@field left NuiPopup
----@field mid NuiPopup
----@field right NuiPopup
+---@field left Navbuddy.pane
+---@field mid Navbuddy.pane
 ---@field state Navbuddy.display.state
 ---@overload fun(opts:Navbuddy.display.opts): Navbuddy.display
 local display = setmetatable({}, {
@@ -114,112 +150,37 @@ local display = setmetatable({}, {
 display.__index = display
 
 ---@param opts Navbuddy.display.opts|Navbuddy.display
----@return any
+---@return Navbuddy.display
 function display.new(opts)
-  local self = setmetatable({}, display)
-  local config = opts.config
-
-  -- NUI elements
-  local left_popup = nui_popup(merge({
-    focusable = false,
-    border = config.window.sections.left.border or ui.get_border_chars(config.window.border, "left"),
-    win_options = {
-      winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder",
-    },
-    buf_options = {
-      modifiable = false,
-    },
-  }, {
-    win_options = config.window.sections.left.win_options,
-    buf_options = config.window.sections.left.buf_options,
-  }))
-
-  local mid_popup = nui_popup(merge({
-    enter = true,
-    border = config.window.sections.mid.border or ui.get_border_chars(config.window.border, "mid"),
-    win_options = {
-      winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder",
-      scrollofe = config.window.scrolloff,
-    },
-    buf_options = {
-      modifiable = false,
-    },
-  }, {
-    win_options = config.window.sections.mid.win_options,
-    buf_options = config.window.sections.mid.buf_options,
-  }))
-
-  local lsp_name = {
-    bottom = nui_text("[" .. opts.lsp_name .. "]", "NavbuddyFloatBorder"),
-    bottom_align = "right",
-  }
-
-  if
-    config.window.sections.right.border == "none"
-    or config.window.border == "none"
-    or config.window.sections.right.border == "shadow"
-    or config.window.border == "shadow"
-    or config.window.sections.right.border == "solid"
-    or config.window.border == "solid"
-  then
-    lsp_name = nil
-  end
-
-  local right_border = config.window.sections.right.border
-  local right_popup = nui_popup(merge({
-    focusable = true,
-    border = {
-      style = right_border and right_border.style or right_border or ui.get_border_chars(config.window.border, "right"),
-      text = lsp_name,
-    },
-    win_options = {
-      winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder",
-      scrolloff = 0,
-    },
-    buf_options = {
-      modifiable = false,
-    },
-  }, {
-    win_options = config.window.sections.right.win_options,
-    buf_options = config.window.sections.right.buf_options,
-  }))
-
-  local layout = nui_layout(
-    {
-      relative = "editor",
-      position = config.window.position,
-      size = config.window.size,
-    },
-    nui_layout.Box({
-      nui_layout.Box(left_popup, { size = config.window.sections.left.size }),
-      nui_layout.Box(mid_popup, { size = config.window.sections.mid.size }),
-      nui_layout.Box(right_popup, { grow = 1 }),
-    }, { dir = "row" })
-  )
-
-  -- Prevent black splash on transparent terminals
-  if vim.g.navbuddy_taransparent then
-    layout._.float.win_options = { winblend = 0 }
-  end
-
+  local self = setmetatable({}, display --[[@as metatable]])
   self.config = opts.config
   self.lsp_name = opts.lsp_name
   self.for_buf = opts.for_buf
   self.for_win = opts.for_win
   self.start_cursor = opts.start_cursor
   self.focus_node = opts.focus_node
-  -- self.lsp_name = lsp_name
-  self.layout = layout
-  self.left = left_popup
-  self.mid = mid_popup
-  self.right = right_popup
   self.state = {
     leaving_window_for_action = false,
     leaving_window_for_reorientation = false,
     closed = false,
-    -- source_buffer_scrolloff = nil,
-    -- user_gui_cursor = nil,
+    original_win = vim.api.nvim_get_current_win(),
   }
+
+  local strip_height = resolve_pct(self.config.window.height, vim.o.lines)
+  local left_width = resolve_pct(self.config.window.sections.left.width, vim.o.columns)
+
+  vim.api.nvim_set_current_win(self.for_win)
+
+  vim.cmd("rightbelow " .. strip_height .. "split")
+  local mid_win = vim.api.nvim_get_current_win()
+
+  vim.cmd("leftabove " .. left_width .. "vsplit")
+  local left_win = vim.api.nvim_get_current_win()
+
+  self.left = configure_pane(left_win, self.config.window.sections.left, {})
+  self.mid = configure_pane(mid_win, self.config.window.sections.mid, { filetype = "Navbuddy" })
+
+  vim.api.nvim_set_current_win(self.mid.winid)
 
   display.init(self)
   return self
@@ -228,25 +189,22 @@ end
 function display:init()
   ui.highlight_setup(self.config)
 
-  -- Set filetype
-  vim.api.nvim_buf_set_option(self.mid.bufnr, "filetype", "Navbuddy")
-
-  -- Hidden cursor
   if self.state.user_gui_cursor == nil then
-    self.state.user_gui_cursor = vim.api.nvim_get_option("guicursor")
+    self.state.user_gui_cursor = vim.o.guicursor
   end
-  self.state.user_gui_cursor = vim.api.nvim_get_option("guicursor")
   if self.state.user_gui_cursor ~= "" then
-    vim.api.nvim_set_option("guicursor", "a:NavbuddyCursor")
+    vim.o.guicursor = "a:NavbuddyCursor"
   end
 
-  -- User Scrolloff
   if self.config.source_buffer.scrolloff then
-    self.state.source_buffer_scrolloff = vim.api.nvim_get_option("scrolloff")
-    vim.api.nvim_set_option("scrolloff", self.config.source_buffer.scrolloff)
+    self.state.source_buffer_scrolloff = vim.o.scrolloff
+    vim.o.scrolloff = self.config.source_buffer.scrolloff
   end
 
-  -- Autocmds
+  if self.config.window.scrolloff then
+    vim.wo[self.mid.winid].scrolloff = self.config.window.scrolloff
+  end
+
   local augroup = vim.api.nvim_create_augroup("Navbuddy", { clear = false })
   vim.api.nvim_clear_autocmds({ buffer = self.mid.bufnr })
   vim.api.nvim_create_autocmd("CursorMoved", {
@@ -282,7 +240,7 @@ function display:init()
     group = augroup,
     buffer = self.mid.bufnr,
     callback = function()
-      vim.api.nvim_set_option("guicursor", self.state.user_gui_cursor)
+      vim.o.guicursor = self.state.user_gui_cursor
     end,
   })
   vim.api.nvim_create_autocmd("CmdlineLeave", {
@@ -290,20 +248,17 @@ function display:init()
     buffer = self.mid.bufnr,
     callback = function()
       if self.state.user_gui_cursor ~= "" then
-        vim.api.nvim_set_option("guicursor", "a:NavbuddyCursor")
+        vim.o.guicursor = "a:NavbuddyCursor"
       end
     end,
   })
 
-  -- Mappings
-  for i, v in pairs(self.config.mappings) do
-    self.mid:map("n", i, function()
-      v.callback(self)
-    end, { nowait = true })
+  for lhs, mapping in pairs(self.config.mappings) do
+    vim.keymap.set("n", lhs, function()
+      mapping.callback(self)
+    end, { buffer = self.mid.bufnr, nowait = true })
   end
 
-  -- Display
-  self.layout:mount()
   self:redraw()
   self:focus_range()
   return self
@@ -320,31 +275,15 @@ function display:focus_range()
 
   if self.config.source_buffer.highlight then
     for _, v in ipairs(ranges) do
-      local highlight, range = unpack(v)
-
-      if range["start"].line == range["end"].line then
-        vim.api.nvim_buf_add_highlight(
-          self.for_buf,
-          ns,
-          highlight,
-          range["start"].line - 1,
-          range["start"].character,
-          range["end"].character
-        )
-      else
-        vim.api.nvim_buf_add_highlight(
-          self.for_buf,
-          ns,
-          highlight,
-          range["start"].line - 1,
-          range["start"].character,
-          -1
-        )
-        vim.api.nvim_buf_add_highlight(self.for_buf, ns, highlight, range["end"].line - 1, 0, range["end"].character)
-        for i = range["start"].line, range["end"].line - 2, 1 do
-          vim.api.nvim_buf_add_highlight(self.for_buf, ns, highlight, i, 0, -1)
-        end
-      end
+      local highlight = v[1] --[[@as string]]
+      local range = v[2] --[[@as Range]]
+      vim.hl.range(
+        self.for_buf,
+        ns,
+        highlight,
+        { range["start"].line - 1, range["start"].character },
+        { range["end"].line - 1, range["end"].character }
+      )
     end
   end
 
@@ -386,70 +325,13 @@ function display:reorient(ro_win, reorient_method)
   self.state.leaving_window_for_reorientation = false
 end
 
-function display:show_preview()
-  vim.api.nvim_win_set_buf(self.right.winid, self.for_buf)
-
-  local win_options = merge({
-    winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder",
-    signcolumn = "no",
-    foldlevel = 100,
-    wrap = false,
-  }, self.config.window.sections.right.win_options or {})
-
-  for opt_name, opt_value in pairs(win_options) do
-    vim.api.nvim_win_set_option(self.right.winid, opt_name, opt_value)
-  end
-
-  self:reorient(self.right.winid, "smart")
-end
-
-function display:hide_preview()
-  vim.api.nvim_win_set_buf(self.right.winid, self.right.bufnr)
-  local node = self.focus_node
-  if node.children then
-    if node.memory then
-      fill_buffer(self.right, node.children[node.memory], self.config)
-    else
-      fill_buffer(self.right, node.children[1], self.config)
-    end
-  else
-    clear_buffer(self.right)
-  end
-end
-
 function display:clear_highlights()
-  vim.api.nvim_buf_clear_highlight(self.for_buf, ns, 0, -1)
+  vim.api.nvim_buf_clear_namespace(self.for_buf, ns, 0, -1)
 end
 
 function display:redraw()
   local node = self.focus_node
   fill_buffer(self.mid, node, self.config)
-
-  local preview_method = self.config.window.sections.right.preview
-
-  if preview_method == "always" then
-    self:show_preview()
-  else
-    if node.children then
-      if node.memory then
-        fill_buffer(self.right, node.children[node.memory], self.config)
-      else
-        fill_buffer(self.right, node.children[1], self.config)
-      end
-
-      -- Apply the window options for right_popup
-      for opt_name, opt_value in pairs(self.config.window.sections.right.win_options or {}) do
-        vim.api.nvim_win_set_option(self.right.winid, opt_name, opt_value)
-      end
-    else
-      if preview_method == "leaf" then
-        self:show_preview()
-      else
-        clear_buffer(self.right)
-      end
-    end
-  end
-
   if node.parent.is_root then
     clear_buffer(self.left)
   else
@@ -459,12 +341,21 @@ end
 
 function display:close()
   self.state.closed = true
-  vim.api.nvim_set_option("guicursor", self.state.user_gui_cursor)
+  vim.o.guicursor = self.state.user_gui_cursor
   if self.state.source_buffer_scrolloff then
-    vim.api.nvim_set_option("scrolloff", self.state.source_buffer_scrolloff)
+    vim.o.scrolloff = self.state.source_buffer_scrolloff
   end
-  self.layout:unmount()
   self:clear_highlights()
+
+  for _, pane in ipairs({ self.mid, self.left }) do
+    if vim.api.nvim_win_is_valid(pane.winid) then
+      vim.api.nvim_win_close(pane.winid, true)
+    end
+  end
+
+  if vim.api.nvim_win_is_valid(self.state.original_win) then
+    vim.api.nvim_set_current_win(self.state.original_win)
+  end
 end
 
 return display

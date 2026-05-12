@@ -88,7 +88,7 @@ Use `setup` to override any of the default options
 
 * `icons` : Indicate the type of symbol captured. Default icons assume you have nerd-fonts.
 * `node_markers` : Indicate whether a node is a leaf or branch node. Default icons assume you have nerd-fonts.
-* `window` : Set options related to window's "border", "size", "position".
+* `window` : Set options related to the navbuddy strip — its `height`, `scrolloff`, and per-section `width` / `win_options` / `buf_options`.
 * `use_default_mappings`: If set to false, only mappings set by user are set. Else default mappings are used for keys that are not set by user.
 * `mappings` : Actions to be triggered for specified keybindings. For each keybinding it takes a table of format { callback = <function_to_be_called>, description = "string"}. The callback function takes the "display" object as an argument.
 * `lsp` :
@@ -105,28 +105,18 @@ local actions = require("nvim-navbuddy.actions")
 
 navbuddy.setup {
     window = {
-        border = "single",  -- "rounded", "double", "solid", "none"
-                            -- or an array with eight chars building up the border in a clockwise fashion
-                            -- starting with the top-left corner. eg: { "╔", "═" ,"╗", "║", "╝", "═", "╚", "║" }.
-        size = "60%",       -- Or table format example: { height = "40%", width = "100%"}
-        position = "50%",   -- Or table format example: { row = "100%", col = "0%"}
-        scrolloff = nil,    -- scrolloff value within navbuddy window
+        height = "50%",       -- Height of the navbuddy strip ("NN%" of &lines, or absolute int).
+        scrolloff = nil,      -- scrolloff value inside the navbuddy MID window
         sections = {
             left = {
-                size = "20%",
-                border = nil, -- You can set border style for each section individually as well.
+                width = "20%",  -- Width of LEFT pane ("NN%" of &columns, or absolute int).
+                win_options = nil,
+                buf_options = nil,
             },
             mid = {
-                size = "40%",
-                border = nil,
+                win_options = nil,
+                buf_options = nil,
             },
-            right = {
-                -- No size option for right most section. It fills to
-                -- remaining area.
-                border = nil,
-                preview = "leaf",  -- Right section can show previews too.
-                                   -- Options: "leaf", "always" or "never"
-            }
         },
     },
     node_markers = {
@@ -206,8 +196,6 @@ navbuddy.setup {
 
         ["J"] = actions.move_down(),        -- Move focused node down
         ["K"] = actions.move_up(),          -- Move focused node up
-
-        ["s"] = actions.toggle_preview(),   -- Show preview of current node
 
         ["<C-v>"] = actions.vsplit(),       -- Open selected node in a vertical split
         ["<C-s>"] = actions.hsplit(),       -- Open selected node in a horizontal split

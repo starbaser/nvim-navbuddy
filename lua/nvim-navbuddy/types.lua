@@ -1,23 +1,18 @@
----@alias BorderConfig 'double'|'none'|'rounded'|'shadow'|'single'|'solid'|'default'|nui_popup_border_options
----@alias SectionName "left"|"mid"|"right"
+---@alias SectionName "left"|"mid"
 
 ---@class Integrations
 ---@field snacks? boolean
 ---@field telescope? boolean
 
 ---@class WindowSectionConfig
----@field border? BorderConfig
----@field size? string
----@field preview? "always"|"leaf"|"never"
+---@field width? string|number
 ---@field buf_options? table<string, any>
 ---@field win_options? table<string, any>
 
 ---@class WindowConfig
----@field border? BorderConfig
----@field size? number|string|nui_layout_option_size
----@field position? string
+---@field height? string|number
 ---@field scrolloff? number
----@field sections? { left?: WindowSectionConfig, mid?: WindowSectionConfig, right?: WindowSectionConfig }
+---@field sections? { left?: WindowSectionConfig, mid?: WindowSectionConfig }
 
 ---@class NodeMarkersIcons
 ---@field leaf? string
@@ -77,5 +72,9 @@
 ---@field scope Range
 ---@field children? Navbuddy.symbolNode[]|nil
 ---@field parent? Navbuddy.symbolNode|nil
+
+---@class Navbuddy.pane
+---@field winid integer
+---@field bufnr integer
 
 ---@alias Navbuddy.ActionCallback fun(display: Navbuddy.display)

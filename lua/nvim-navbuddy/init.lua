@@ -84,7 +84,9 @@ local actions = require("nvim-navbuddy.actions")
 --- Use |navbuddy.setup| to override any of the default options
 ---
 --- window: table
----   Set options related to window's "border", "size", "position".
+---   Set options related to the navbuddy strip — "height" (of the bottom
+---   strip relative to the editor), "scrolloff", and per-section "width"
+---   and option overrides.
 ---
 --- icons: table
 ---   Icons to show for captured symbols. Default icons assume that you
@@ -136,32 +138,20 @@ local actions = require("nvim-navbuddy.actions")
 local config = {
   --minidoc_replace_end
   window = {
-    -- border can be string or an array with eight chars building up the border in a clockwise fashion
-    -- starting with the top-left corner. eg: { "╔", "═" ,"╗", "║", "╝", "═", "╚", "║" }.
-    border = "single",     -- Options: "double"|"none"|"rounded"|"shadow"|"single"|"solid"|"default"
-    size = "60%",          -- Or table format example: { height = "40%", width = "100%"}
-    position = "50%",      -- Or table format example: { row = "100%", col = "0%"}
-    scrolloff = nil,       -- scrolloff value within navbuddy window
+    height = "50%",          -- Height of the navbuddy strip ("NN%" of &lines, or absolute int).
+    scrolloff = nil,         -- scrolloff value inside the navbuddy MID window
     sections = {
       left = {
-        border = nil,      -- You can set border style for each section individually as well.
-        size = "20%",
-        win_options = nil, -- list of window options for each section individually.
+        width = "20%",       -- Width of LEFT pane ("NN%" of &columns, or absolute int).
+        win_options = nil,
+        buf_options = nil,
       },
       mid = {
-        border = nil,
-        size = "40%",
         win_options = {
           -- number = true,-- Uncomment this line if you want see the number
           -- relativenumber = true,
         },
-      },
-      right = {
-        -- No size option for right most section. It fills to remaining area.
-        border = nil,
-        preview = "leaf",  -- Options: "leaf"|"always"|"never"
-                           -- "leaf": Right section can show previews too.
-        win_options = nil,
+        buf_options = nil,
       },
     },
   },
@@ -241,8 +231,6 @@ local config = {
     ["J"] = actions.move_down(),        -- Move focused node down
     ["K"] = actions.move_up(),          -- Move focused node up
 
-    ["s"] = actions.toggle_preview(),   -- Show preview of current node
-
     ["<C-v>"] = actions.vsplit(),       -- Open selected node in a vertical split
     ["<C-s>"] = actions.hsplit(),       -- Open selected node in a horizontal split
 
@@ -284,13 +272,7 @@ setmetatable(config.icons, {
 local navbuddy_attached_clients = {}
 
 local function choose_lsp_menu(for_buf, make_request)
-  local style = nil
-
-  if config.window.border ~= nil and config.window.border ~= "None" then
-    style = config.window.border
-  else
-    style = "single"
-  end
+  local style = "single"
 
   local min_width = 23
   local lines = {}
@@ -457,17 +439,6 @@ function navbuddy.setup(user_config)
   if user_config ~= nil then
     if user_config.window ~= nil then
       config.window = vim.tbl_deep_extend("keep", user_config.window, config.window)
-    end
-
-    -- If one is set, default for others should be none
-    if
-      config.window.sections.left.border ~= nil
-      or config.window.sections.mid.border ~= nil
-      or config.window.sections.right.border ~= nil
-    then
-      config.window.sections.left.border = config.window.sections.left.border or "none"
-      config.window.sections.mid.border = config.window.sections.mid.border or "none"
-      config.window.sections.right.border = config.window.sections.right.border or "none"
     end
 
     if user_config.node_markers ~= nil then
