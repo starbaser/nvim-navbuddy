@@ -7,10 +7,9 @@ https://user-images.githubusercontent.com/43147494/227758807-13a614ff-a09d-4be0-
 
 ## ⚡️ Requirements
 
-* Neovim >= 0.8.0
+* Neovim >= 0.10.0
 * [nvim-lspconfig](https://github.com/neovim/nvim-lspconfig)
 * [nvim-navic](https://github.com/SmiteshP/nvim-navic)
-* [nui.nvim](https://github.com/MunifTanjim/nui.nvim)
 
 ## 📦 Installation
 
@@ -24,7 +23,6 @@ use {
     requires = {
         "neovim/nvim-lspconfig",
         "SmiteshP/nvim-navic",
-        "MunifTanjim/nui.nvim",
         "numToStr/Comment.nvim",        -- Optional
         "nvim-telescope/telescope.nvim" -- Optional
     }
@@ -36,7 +34,6 @@ use {
 ```vim
 Plug "neovim/nvim-lspconfig"
 Plug "SmiteshP/nvim-navic"
-Plug "MunifTanjim/nui.nvim"
 Plug "numToStr/Comment.nvim",        " Optional
 Plug "nvim-telescope/telescope.nvim" " Optional
 Plug "SmiteshP/nvim-navbuddy"
@@ -56,7 +53,6 @@ return {
             "SmiteshP/nvim-navbuddy",
             dependencies = {
                 "SmiteshP/nvim-navic",
-                "MunifTanjim/nui.nvim"
             },
             opts = { lsp = { auto_attach = true } }
         }
@@ -94,6 +90,12 @@ Use `setup` to override any of the default options
 * `lsp` :
     * `auto_attach` : Enable to have Navbuddy automatically attach to every LSP for current buffer. Its disabled by default.
     * `preference` : Table ranking lsp_servers. Lower the index, higher the priority of the server. If there are more than one server attached to a buffer, navbuddy will refer to this list to make a decision on which one to use. for example - In case a buffer is attached to clangd and ccls both and the preference list is `{ "clangd", "pyright" }`. Then clangd will be prefered.
+* `workspace` :
+    * `enabled` : Enable workspace-scope navigation across files in the LSP workspace roots. Default `true`.
+    * `default_scope` : `"auto"` (workspace if any LSP exposes one, else buffer), `"workspace"` (error if no workspace LSP), or `"buffer"`. Default `"auto"`.
+    * `max_files` : Hard cap on the workspace file scan. Default `5000`. A warning is shown if hit.
+    * `exclude_dirs` : Directory basenames skipped during the scan. Default includes `.git`, `node_modules`, `target`, `build`, `dist`, etc.
+    * `cache` : Reuse a single workspace tree across invocations. Symbol entries are invalidated on `BufWritePost` of the corresponding file. Default `false`.
 * `source_buffer` :
     * `follow_node` : Keep the current node in focus on the source buffer
     * `highlight` : Highlight the currently focused node
@@ -216,6 +218,17 @@ navbuddy.setup {
         auto_attach = false,   -- If set to true, you don't need to manually use attach function
         preference = nil,      -- list of lsp server names in order of preference
     },
+    workspace = {
+        enabled = true,
+        default_scope = "auto",  -- "auto" | "workspace" | "buffer"
+        max_files = 5000,
+        exclude_dirs = {
+            ".git", ".hg", ".svn",
+            "node_modules", ".direnv", "result",
+            "target", "build", "dist", "coverage",
+        },
+        cache = false,           -- Reuse workspace tree across invocations
+    },
     source_buffer = {
         follow_node = true,    -- Keep the current node in focus on the source buffer
         highlight = true,      -- Highlight the currently focused node
@@ -228,15 +241,32 @@ navbuddy.setup {
 
 ## 🚀 Usage
 
-`Navbuddy` command can be used to open navbuddy.
+`Navbuddy` command opens navbuddy. By default the scope is `workspace.default_scope` (auto).
 
 ```
-:Navbuddy
+:Navbuddy             " Use configured default scope
+:Navbuddy buffer      " Force buffer-only navigation (symbols in current file)
+:Navbuddy workspace   " Force workspace navigation (directory tree + lazy symbol load)
+:Navbuddy root        " Open at the workspace root (only with workspace scope)
 ```
 
-And alternatively lua function `open` can also be used to open navbuddy.
+And alternatively lua function `open` can also be used:
 
 ```
-:lua require("nvim-navbuddy").open()
+:lua require("nvim-navbuddy").open()                       -- default scope
+:lua require("nvim-navbuddy").open({ scope = "workspace" })
+:lua require("nvim-navbuddy").open({ scope = "buffer" })
 ```
+
+### Workspace navigation
+
+In workspace scope, navbuddy walks the LSP client's workspace roots, presenting
+directories and files alongside symbols. Selecting a directory drills in;
+selecting a file lazily fetches that file's symbols via
+`textDocument/documentSymbol` and lets you continue into them. The current
+file is auto-focused at the closest symbol to your cursor.
+
+Tune behavior with `workspace.max_files`, `workspace.exclude_dirs`, and
+`workspace.cache`. On large monorepos the cache is recommended; it survives
+across invocations and is invalidated per-file on save.
 

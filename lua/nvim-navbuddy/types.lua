@@ -29,8 +29,10 @@
 
 ---@class WorkspaceConfig
 ---@field enabled? boolean
+---@field default_scope? "auto"|"workspace"|"buffer"
 ---@field max_files? integer
 ---@field exclude_dirs? string[]
+---@field cache? boolean
 
 ---@class KeyMapping
 ---@field callback fun(display: table)

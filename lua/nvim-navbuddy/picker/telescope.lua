@@ -79,14 +79,15 @@ M.find = function(opts, display)
           display.focus_node = selection.value
           t_actions.close(prompt_bufnr)
         end)
-        local enhance_close = t_actions.close["enhance"]
-        if enhance_close then
-          enhance_close(t_actions.close, {
-            post = function()
+        vim.api.nvim_create_autocmd("BufWipeout", {
+          buffer = prompt_bufnr,
+          once = true,
+          callback = function()
+            vim.schedule(function()
               display = require("nvim-navbuddy.display").new(display)
-            end,
-          })
-        end
+            end)
+          end,
+        })
         return true
       end,
     })

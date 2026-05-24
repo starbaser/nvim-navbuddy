@@ -1,4 +1,5 @@
 local navic = require("nvim-navic.lib")
+local utils = require("nvim-navbuddy.utils")
 
 local M = {}
 local Workspace = {}
@@ -29,12 +30,6 @@ local function join_path(...)
   return path
 end
 
-local function is_subpath(path, root)
-  path = normalize(path)
-  root = normalize(root)
-  return path == root or vim.startswith(path, root .. "/")
-end
-
 local function split_path(path)
   local parts = {}
   for part in path:gmatch("[^/]+") do
@@ -57,27 +52,23 @@ local function make_node(node)
   return node
 end
 
+local function dirs_first_then_alpha(a, b)
+  if a.node_type ~= b.node_type then
+    if a.node_type == "directory" then
+      return true
+    elseif b.node_type == "directory" then
+      return false
+    end
+  end
+  return a.name:lower() < b.name:lower()
+end
+
 local function link_children(node)
   if not node.children then
     return
   end
-
-  table.sort(node.children, function(a, b)
-    if a.node_type ~= b.node_type then
-      if a.node_type == "directory" then
-        return true
-      elseif b.node_type == "directory" then
-        return false
-      end
-    end
-    return a.name:lower() < b.name:lower()
-  end)
-
-  for i, child in ipairs(node.children) do
-    child.index = i
-    child.parent = node
-    child.prev = node.children[i - 1]
-    child.next = node.children[i + 1]
+  utils.relink_children(node, dirs_first_then_alpha)
+  for _, child in ipairs(node.children) do
     link_children(child)
   end
 end
@@ -136,14 +127,45 @@ function M.client_roots(client)
   return roots
 end
 
-function M.client_contains(client, path)
-  path = path ~= "" and path or vim.fn.getcwd()
-  for _, root in ipairs(M.client_roots(client)) do
-    if is_subpath(path, root.path) then
-      return true
-    end
+M._cache = {}
+local invalidation_setup = false
+
+local function setup_invalidation()
+  if invalidation_setup then
+    return
   end
-  return false
+  invalidation_setup = true
+  vim.api.nvim_create_autocmd("BufWritePost", {
+    group = vim.api.nvim_create_augroup("NavbuddyWorkspaceCache", { clear = true }),
+    callback = function(args)
+      local filename = normalize(vim.api.nvim_buf_get_name(args.buf))
+      for _, ws in pairs(M._cache) do
+        local fn = ws.files[filename]
+        if fn then
+          fn.symbols_loaded = false
+          fn.children = nil
+        end
+      end
+    end,
+  })
+end
+
+---@param client vim.lsp.Client
+---@param anchor_bufnr number
+---@param config Navbuddy.config
+function M.get_or_create(client, anchor_bufnr, config)
+  if not config.workspace.cache then
+    return M.new(client, anchor_bufnr, config)
+  end
+  setup_invalidation()
+  local cached = M._cache[client.id]
+  if cached and cached.root then
+    cached.anchor_bufnr = anchor_bufnr
+    return cached
+  end
+  local ws = M.new(client, anchor_bufnr, config)
+  M._cache[client.id] = ws
+  return ws
 end
 
 ---@param client vim.lsp.Client
@@ -169,34 +191,47 @@ function Workspace:_excluded(name)
 end
 
 function Workspace:_scan_dir(root, dir, rel, files)
-  local handle = uv.fs_scandir(dir)
-  if not handle then
-    return true
-  end
-
-  while true do
-    local name, type_ = uv.fs_scandir_next(handle)
-    if not name then
-      break
-    end
-
-    local abs = join_path(dir, name)
-    local child_rel = rel == "" and name or join_path(rel, name)
-
-    if type_ == "directory" then
-      if not self:_excluded(name) and not self:_scan_dir(root, abs, child_rel, files) then
-        return false
+  local queue = { { dir = dir, rel = rel } }
+  local head = 1
+  while head <= #queue do
+    local entry = queue[head]
+    head = head + 1
+    local handle = uv.fs_scandir(entry.dir)
+    if handle then
+      local subdirs = {}
+      local subfiles = {}
+      while true do
+        local name, type_ = uv.fs_scandir_next(handle)
+        if not name then
+          break
+        end
+        if type_ == "directory" then
+          if not self:_excluded(name) then
+            table.insert(subdirs, name)
+          end
+        elseif type_ == "file" then
+          table.insert(subfiles, name)
+        end
       end
-    elseif type_ == "file" then
-      table.insert(files, { root = root, path = normalize(abs), rel = child_rel })
-      if #files >= self.config.workspace.max_files then
-        self.truncated = true
-        return false
+      table.sort(subfiles)
+      table.sort(subdirs)
+
+      for _, name in ipairs(subfiles) do
+        local abs = join_path(entry.dir, name)
+        local child_rel = entry.rel == "" and name or join_path(entry.rel, name)
+        table.insert(files, { root = root, path = normalize(abs), rel = child_rel })
+        if #files >= self.config.workspace.max_files then
+          self.truncated = true
+          return
+        end
+      end
+      for _, name in ipairs(subdirs) do
+        local abs = join_path(entry.dir, name)
+        local child_rel = entry.rel == "" and name or join_path(entry.rel, name)
+        table.insert(queue, { dir = abs, rel = child_rel })
       end
     end
   end
-
-  return true
 end
 
 function Workspace:_insert_file(parent, file)
@@ -240,6 +275,9 @@ function Workspace:_insert_file(parent, file)
 end
 
 function Workspace:_clear_child_maps(node)
+  if node.node_type ~= "directory" and not node.is_root then
+    return
+  end
   node._child_map = nil
   if not node.children then
     return
@@ -342,28 +380,27 @@ function Workspace:load_symbols(file_node, callback)
   client_request(self.client, "textDocument/documentSymbol", params, function(err, symbols)
     vim.schedule(function()
       file_node.symbols_loading = false
-      file_node.symbols_loaded = true
 
       if err then
         vim.notify(
           "Navbuddy failed to load symbols for " .. file_node.name .. ": " .. tostring(err.message or err),
           vim.log.levels.ERROR
         )
-      elseif symbols and #symbols > 0 then
-        local tree = navic.parse(symbols)
-        require("nvim-navbuddy.augment").augment(bufnr, tree, filetype_for_buf(bufnr) or "")
-        file_node.children = tree.children
+      else
+        file_node.symbols_loaded = true
+        if symbols and #symbols > 0 then
+          local tree = navic.parse(symbols)
+          require("nvim-navbuddy.augment").augment(bufnr, tree, filetype_for_buf(bufnr) or "")
+          file_node.children = tree.children
 
-        if file_node.children and #file_node.children > 0 then
-          for i, child in ipairs(file_node.children) do
-            child.parent = file_node
-            child.index = i
-            child.prev = file_node.children[i - 1]
-            child.next = file_node.children[i + 1]
-            set_symbol_metadata(child, file_node)
+          if file_node.children and #file_node.children > 0 then
+            for _, child in ipairs(file_node.children) do
+              set_symbol_metadata(child, file_node)
+            end
+            utils.relink_children(file_node)
+          else
+            file_node.children = nil
           end
-        else
-          file_node.children = nil
         end
       end
 
@@ -377,11 +414,10 @@ function Workspace:load_symbols(file_node, callback)
 end
 
 function Workspace:closest_symbol(file_node, cursor_pos)
-  local best = file_node
+  local line = cursor_pos[1]
+  local char = cursor_pos[2]
 
   local function in_range(node)
-    local line = cursor_pos[1]
-    local char = cursor_pos[2]
     local range = node.scope
     if not range then
       return false
@@ -398,17 +434,22 @@ function Workspace:closest_symbol(file_node, cursor_pos)
     return true
   end
 
-  local function visit(node)
-    if node.node_type == "symbol" and in_range(node) then
-      best = node
-    end
+  local best = file_node
+  local node = file_node
+  while true do
+    local descended = false
     for _, child in ipairs(node.children or {}) do
-      visit(child)
+      if child.node_type == "symbol" and in_range(child) then
+        best = child
+        node = child
+        descended = true
+        break
+      end
+    end
+    if not descended then
+      return best
     end
   end
-
-  visit(file_node)
-  return best
 end
 
 return M

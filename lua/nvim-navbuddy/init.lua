@@ -74,7 +74,6 @@
 ---@toc_entry Commands
 
 local navic = require("nvim-navic.lib")
-local nui_menu = require("nui.menu")
 local display = require("nvim-navbuddy.display")
 local actions = require("nvim-navbuddy.actions")
 local workspace = require("nvim-navbuddy.workspace")
@@ -115,6 +114,24 @@ local workspace = require("nvim-navbuddy.workspace")
 ---     example: Incase a buffer is attached to clangd and ccls both and
 ---     the preference list is { "clangd", "pyright" }. Then clangd will
 ---     be prefered.
+---
+--- workspace: table
+---   enabled: boolean
+---     Whether workspace-scope navigation is available. Default true.
+---   default_scope: string
+---     "auto" | "workspace" | "buffer". Picks the default for :Navbuddy
+---     when no explicit subcommand is passed. "auto" tries workspace and
+---     falls back to buffer if no LSP exposes a workspace root.
+---   max_files: integer
+---     Hard cap on the breadth-first file scan. A warning is shown if
+---     hit. Default 5000.
+---   exclude_dirs: string[]
+---     Directory basenames skipped during the scan. Defaults include
+---     .git, node_modules, target, build, dist, etc.
+---   cache: boolean
+---     Reuse a single workspace tree across :Navbuddy invocations.
+---     Cached per-file symbol entries are invalidated on BufWritePost
+---     of the corresponding file. Default false.
 ---
 --- source_buffer:
 ---   follow_node: boolean
@@ -184,6 +201,8 @@ local config = {
     [25] = "󰆕 ", -- Operator
     [26] = "󰊄 ", -- TypeParameter
     [255] = "󰉨 ",-- Macro
+    directory = "󰉋 ",
+    workspace = "󰉋 ",
   },
   use_default_mappings = true,
   -- Each Integration is auto-detected through plugin presence, however, it can
@@ -245,6 +264,7 @@ local config = {
   },
   workspace = {
     enabled = true,
+    default_scope = "auto",  -- "auto"|"workspace"|"buffer"
     max_files = 5000,
     exclude_dirs = {
       ".git",
@@ -305,56 +325,17 @@ local function supports_document_symbols(client)
   return client.server_capabilities and client.server_capabilities.documentSymbolProvider
 end
 
-local function client_name_width(client)
-  return #tostring(client.id) + #client.name + 1
-end
-
 local function choose_lsp_menu(clients, make_request)
-  local style = "single"
-
-  local min_width = 23
-  local lines = {}
-
-  for _, v in ipairs(clients) do
-    min_width = math.max(min_width, client_name_width(v))
-    table.insert(lines, nui_menu.item(v.id .. ":" .. v.name))
-  end
-
-  local min_height = #lines
-
-  local menu = nui_menu({
-    relative = "editor",
-    position = "50%",
-    border = {
-      style = style,
-      text = {
-        top = "[Choose LSP Client]",
-        top_align = "center",
-      },
-    },
-  }, {
-    lines = lines,
-    min_width = min_width,
-    min_height = min_height,
-    keymap = {
-      focus_next = { "j", "<Down>", "<Tab>" },
-      focus_prev = { "k", "<Up>", "<S-Tab>" },
-      close = { "<Esc>", "q", "<C-c>" },
-      submit = { "<CR>", "<Space>", "l" },
-    },
-    on_close = function() end,
-    on_submit = function(item)
-      local id = tonumber(string.match(item.text, "%d+"))
-      for _, check_client in ipairs(clients) do
-        if id == check_client.id then
-          make_request(check_client)
-          return
-        end
-      end
+  vim.ui.select(clients, {
+    prompt = "Choose LSP Client:",
+    format_item = function(client)
+      return client.id .. ":" .. client.name
     end,
-  })
-
-  menu:mount()
+  }, function(selected)
+    if selected then
+      make_request(selected)
+    end
+  end)
 end
 
 local function sort_clients_by_preference(clients)
@@ -470,10 +451,6 @@ end
 local function active_clients_for_workspace(bufnr)
   local clients = {}
   local seen = {}
-  local current_path = vim.api.nvim_buf_get_name(bufnr)
-  if current_path == "" then
-    current_path = vim.fn.getcwd()
-  end
 
   local function add(client)
     if client and seen[client.id] == nil and supports_document_symbols(client) then
@@ -488,12 +465,6 @@ local function active_clients_for_workspace(bufnr)
 
   for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
     add(client)
-  end
-
-  for _, client in ipairs(vim.lsp.get_clients()) do
-    if workspace.client_contains(client, current_path) then
-      add(client)
-    end
   end
 
   return clients
@@ -520,8 +491,8 @@ local function open_workspace(bufnr, opts, fallback)
   end
 
   local function make_request(client)
-    local session = workspace.new(client, bufnr, config)
-    local root = session:build()
+    local session = workspace.get_or_create(client, bufnr, config)
+    local root = session.root or session:build()
     local file_node = session:file_node_for_buf(bufnr)
     local source_win = vim.api.nvim_get_current_win()
     local start_cursor = vim.api.nvim_win_get_cursor(source_win)
@@ -683,12 +654,13 @@ function navbuddy.open(opts)
   assert(vim.api.nvim_buf_is_valid(bufnr), "Invalid buffer number")
 
   opts = type(opts) == "table" and opts or {}
+  local scope = opts.scope or config.workspace.default_scope or "auto"
 
-  if opts.scope == "buffer" then
+  if scope == "buffer" then
     request_buffer(bufnr, handler, opts)
   else
     open_workspace(bufnr, opts, function()
-      if opts.scope == "workspace" then
+      if scope == "workspace" then
         vim.notify("No workspace lsp servers attached", vim.log.levels.ERROR)
         return
       end

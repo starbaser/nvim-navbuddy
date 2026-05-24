@@ -7,13 +7,9 @@
 local utils = require("nvim-navbuddy.utils")
 local actions = {}
 
-local function is_symbol_node(node)
-  return node.node_type == nil or node.node_type == "symbol"
-end
-
-local function is_container_node(node)
-  return node.node_type == "directory" or node.node_type == "workspace"
-end
+local is_symbol_node = utils.is_symbol_node
+local is_container_node = utils.is_container_node
+local clamp_cursor = utils.clamp_cursor
 
 local function notify_no_children(node)
   if node.node_type == "file" then
@@ -27,11 +23,6 @@ local function require_symbol(display)
     return nil
   end
   return display:focus_file(display.focus_node)
-end
-
-local function clamp_cursor(bufnr, cursor)
-  local line_count = vim.api.nvim_buf_line_count(bufnr)
-  return { math.min(math.max(cursor[1], 1), line_count), cursor[2] }
 end
 
 local function redraw(display)
@@ -881,6 +872,10 @@ function actions.help()
     local function quit_help()
       if vim.api.nvim_win_is_valid(winid) then
         vim.api.nvim_win_close(winid, true)
+      end
+      if not vim.api.nvim_win_is_valid(display.for_win) then
+        vim.notify("Navbuddy: source window closed while in help; not reopening", vim.log.levels.WARN)
+        return
       end
       require("nvim-navbuddy.display").new(display)
     end

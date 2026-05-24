@@ -1,12 +1,11 @@
 local navic = require("nvim-navic.lib")
 
 local ui = require("nvim-navbuddy.ui")
+local utils = require("nvim-navbuddy.utils")
 
 local ns = vim.api.nvim_create_namespace("nvim-navbuddy")
 
-local function is_symbol_node(node)
-  return node.node_type == nil or node.node_type == "symbol"
-end
+local is_symbol_node = utils.is_symbol_node
 
 local function can_expand(node)
   return node.children ~= nil or (node.node_type == "file" and not node.symbols_loaded)
@@ -14,7 +13,7 @@ end
 
 local function node_icon(node, config)
   if node.node_type == "directory" or node.node_type == "workspace" then
-    return "󰉋 "
+    return config.icons[node.node_type]
   end
   return config.icons[node.kind]
 end
@@ -144,6 +143,7 @@ end
 ---@field leaving_window_for_reorientation boolean
 ---@field closed boolean
 ---@field original_win integer
+---@field for_win_opts table<string, any>
 ---@field highlight_buf? number
 ---@field source_buffer_scrolloff? number
 ---@field user_gui_cursor? string
@@ -186,14 +186,19 @@ function display.new(opts)
     leaving_window_for_reorientation = false,
     closed = false,
     original_win = vim.api.nvim_get_current_win(),
+    for_win_opts = {
+      number = vim.wo[opts.for_win].number,
+      relativenumber = vim.wo[opts.for_win].relativenumber,
+      signcolumn = vim.wo[opts.for_win].signcolumn,
+      cursorline = vim.wo[opts.for_win].cursorline,
+      foldcolumn = vim.wo[opts.for_win].foldcolumn,
+    },
   }
 
   local strip_height = resolve_pct(self.config.window.height, vim.o.lines)
   local left_width = resolve_pct(self.config.window.sections.left.width, vim.o.columns)
 
-  vim.api.nvim_set_current_win(self.for_win)
-
-  vim.cmd("rightbelow " .. strip_height .. "split")
+  vim.cmd("botright " .. strip_height .. "split")
   local mid_win = vim.api.nvim_get_current_win()
 
   vim.cmd("leftabove " .. left_width .. "vsplit")
@@ -447,6 +452,12 @@ function display:close()
   for _, pane in ipairs({ self.mid, self.left }) do
     if vim.api.nvim_win_is_valid(pane.winid) then
       vim.api.nvim_win_close(pane.winid, true)
+    end
+  end
+
+  if vim.api.nvim_win_is_valid(self.for_win) then
+    for k, v in pairs(self.state.for_win_opts) do
+      vim.wo[self.for_win][k] = v
     end
   end
 

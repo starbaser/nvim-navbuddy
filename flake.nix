@@ -31,7 +31,6 @@
           ];
         };
         dependencies = with pkgs.vimPlugins; [
-          nui-nvim
           nvim-lspconfig
           nvim-navic
         ];
@@ -41,7 +40,6 @@
         nvim = pkgs.neovim-unwrapped;
         lua-version = "jit51";
         plugins = with pkgs.vimPlugins; [
-          nui-nvim
           nvim-navic
           telescope-nvim
           snacks-nvim

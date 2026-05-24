@@ -2,15 +2,17 @@ local M = {}
 
 local ts = vim.treesitter
 local SymbolKind = vim.lsp.protocol.SymbolKind
+local utils = require("nvim-navbuddy.utils")
 
--- Compiled query for performance
-local GO_QUERY = [[
+local GO_QUERY_SRC = [[
   (method_declaration receiver: (parameter_list (parameter_declaration name: (identifier) @receiver (#not-eq? @receiver "_"))))
   (parameter_declaration name: (identifier) @param (#not-eq? @param "_"))
   (short_var_declaration left: (expression_list (identifier) @var (#not-eq? @var "_")))
   (var_declaration (var_spec name: (identifier) @var (#not-eq? @var "_")))
   (range_clause left: (expression_list (identifier) @var (#not-eq? @var "_")))
 ]]
+
+local go_query
 
 --- Checks if a line/col is within a navic scope range (1-based line, 0-based col)
 local function is_in_scope(scope, line, col)
@@ -45,7 +47,7 @@ local function find_enclosing_func_node(navic_node, line, col)
     for _, child in ipairs(navic_node.children) do
       local child_match = find_enclosing_func_node(child, line, col)
       if child_match then
-        best_match = child_match
+        return child_match
       end
     end
   end
@@ -61,17 +63,14 @@ function M.augment(bufnr, root_node)
 
   local tree = parser:parse()[1]
   local root = tree:root()
-  local query = ts.query.parse("go", GO_QUERY)
+  go_query = go_query or ts.query.parse("go", GO_QUERY_SRC)
 
-  -- Temporary table to hold children before linking
-  -- Structure: func_node_ref -> { child1, child2, ... }
   local new_children_map = {}
-  local seen = {} -- deduplicate by (line, character) key
+  local seen = {}
 
-  for _, node, _ in query:iter_captures(root, bufnr, 0, -1) do
+  for _, node, _ in go_query:iter_captures(root, bufnr, 0, -1) do
     local start_row, start_col, end_row, end_col = node:range()
 
-    -- Same position can match multiple query patterns
     local key = string.format("%d:%d", start_row, start_col)
     if seen[key] then
       goto continue
@@ -80,26 +79,26 @@ function M.augment(bufnr, root_node)
 
     local name = ts.get_node_text(node, bufnr)
 
-    -- Convert TS 0-based to Navic 1-based line representation
     local start_line = start_row + 1
     local end_line = end_row + 1
 
     local parent_func = find_enclosing_func_node(root_node, start_line, start_col)
 
     if parent_func then
+      -- scope == name_range: a synthetic Variable is a leaf in navbuddy,
+      -- so highlighting/yank/select the "scope" of just the identifier matches
+      -- the user's mental model. A wider block-scope would surprise.
+      local range = {
+        start = { line = start_line, character = start_col },
+        ["end"] = { line = end_line, character = end_col },
+      }
       local synthetic_node = {
         name = name,
-        kind = SymbolKind.Variable, -- Using Variable for both locals and params for MVP
-        name_range = {
-          start = { line = start_line, character = start_col },
-          ["end"] = { line = end_line, character = end_col },
-        },
-        scope = {
-          start = { line = start_line, character = start_col },
-          ["end"] = { line = end_line, character = end_col },
-        },
+        kind = SymbolKind.Variable,
+        name_range = range,
+        scope = range,
         parent = parent_func,
-        children = nil, -- Leaves
+        children = nil,
       }
 
       if not new_children_map[parent_func] then
@@ -110,24 +109,19 @@ function M.augment(bufnr, root_node)
     ::continue::
   end
 
-  -- Wire up the doubly-linked list for navbuddy integration
+  local function by_source_order(a, b)
+    if a.name_range.start.line == b.name_range.start.line then
+      return a.name_range.start.character < b.name_range.start.character
+    end
+    return a.name_range.start.line < b.name_range.start.line
+  end
+
   for parent_func, children in pairs(new_children_map) do
     parent_func.children = parent_func.children or {}
-
-    -- Sort sequentially by appearance in file
-    table.sort(children, function(a, b)
-      if a.name_range.start.line == b.name_range.start.line then
-        return a.name_range.start.character < b.name_range.start.character
-      end
-      return a.name_range.start.line < b.name_range.start.line
-    end)
-
-    for i, child in ipairs(children) do
-      child.index = i
-      child.prev = (i > 1) and children[i - 1] or nil
-      child.next = (i < #children) and children[i + 1] or nil
+    for _, child in ipairs(children) do
       table.insert(parent_func.children, child)
     end
+    utils.relink_children(parent_func, by_source_order)
   end
 
   return root_node
