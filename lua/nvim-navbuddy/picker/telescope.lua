@@ -50,6 +50,7 @@ M.find = function(opts, display)
   end
 
   local function make_entry(node)
+    local filename = node.filename or vim.api.nvim_buf_get_name(display.for_buf)
     return {
       value = node,
       display = make_display,
@@ -57,8 +58,8 @@ M.find = function(opts, display)
       ordinal = string.lower(navic.adapt_lsp_num_to_str(node.kind)) .. " " .. node.name,
       lnum = node.name_range["start"].line,
       col = node.name_range["start"].character,
-      bufnr = display.for_buf,
-      filename = vim.api.nvim_buf_get_name(display.for_buf),
+      bufnr = node.bufnr or display.for_buf,
+      filename = filename,
     }
   end
 
@@ -78,11 +79,14 @@ M.find = function(opts, display)
           display.focus_node = selection.value
           t_actions.close(prompt_bufnr)
         end)
-        t_actions.close:enhance({
-          post = function()
-            display = require("nvim-navbuddy.display").new(display)
-          end,
-        })
+        local enhance_close = t_actions.close["enhance"]
+        if enhance_close then
+          enhance_close(t_actions.close, {
+            post = function()
+              display = require("nvim-navbuddy.display").new(display)
+            end,
+          })
+        end
         return true
       end,
     })

@@ -9,6 +9,9 @@ function M.augment(bufnr, root_node, filetype)
   if not root_node then
     return root_node
   end
+  if not filetype or filetype == "" then
+    return root_node
+  end
 
   local ok, lang_mod = pcall(require, "nvim-navbuddy.augment." .. filetype)
   if not ok then

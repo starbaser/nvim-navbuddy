@@ -77,6 +77,7 @@ local navic = require("nvim-navic.lib")
 local nui_menu = require("nui.menu")
 local display = require("nvim-navbuddy.display")
 local actions = require("nvim-navbuddy.actions")
+local workspace = require("nvim-navbuddy.workspace")
 
 -- stylua: ignore start
 ---@text DEFAULT CONFIG
@@ -242,6 +243,22 @@ local config = {
     auto_attach = false,   -- If set to true, you don't need to manually use attach function
     preference = nil,      -- List of lsp server names in order of preference
   },
+  workspace = {
+    enabled = true,
+    max_files = 5000,
+    exclude_dirs = {
+      ".git",
+      ".hg",
+      ".svn",
+      "node_modules",
+      ".direnv",
+      "result",
+      "target",
+      "build",
+      "dist",
+      "coverage",
+    },
+  },
   source_buffer = {
     follow_node = true,    -- Keep the current node in focus on the source buffer
     highlight = true,      -- Highlight the currently focused node
@@ -271,14 +288,35 @@ setmetatable(config.icons, {
 ---@type table<number, vim.lsp.Client[]>
 local navbuddy_attached_clients = {}
 
-local function choose_lsp_menu(for_buf, make_request)
+local function supports_document_symbols(client)
+  if not client then
+    return false
+  end
+
+  local is_stopped = client.is_stopped
+  if type(is_stopped) == "function" then
+    if is_stopped(client) then
+      return false
+    end
+  elseif is_stopped then
+    return false
+  end
+
+  return client.server_capabilities and client.server_capabilities.documentSymbolProvider
+end
+
+local function client_name_width(client)
+  return #tostring(client.id) + #client.name + 1
+end
+
+local function choose_lsp_menu(clients, make_request)
   local style = "single"
 
   local min_width = 23
   local lines = {}
 
-  for _, v in ipairs(navbuddy_attached_clients[for_buf]) do
-    min_width = math.max(min_width, #v.name)
+  for _, v in ipairs(clients) do
+    min_width = math.max(min_width, client_name_width(v))
     table.insert(lines, nui_menu.item(v.id .. ":" .. v.name))
   end
 
@@ -307,7 +345,7 @@ local function choose_lsp_menu(for_buf, make_request)
     on_close = function() end,
     on_submit = function(item)
       local id = tonumber(string.match(item.text, "%d+"))
-      for _, check_client in ipairs(navbuddy_attached_clients[for_buf]) do
+      for _, check_client in ipairs(clients) do
         if id == check_client.id then
           make_request(check_client)
           return
@@ -319,7 +357,51 @@ local function choose_lsp_menu(for_buf, make_request)
   menu:mount()
 end
 
-local function request(for_buf, handler, opts)
+local function sort_clients_by_preference(clients)
+  if config.lsp.preference == nil then
+    return clients, 0
+  end
+
+  local preferred = {}
+  local by_id = {}
+  local preferred_count = 0
+
+  for _, preferred_lsp in ipairs(config.lsp.preference) do
+    for _, client in ipairs(clients) do
+      if preferred_lsp == client.name and by_id[client.id] == nil then
+        table.insert(preferred, client)
+        by_id[client.id] = true
+        preferred_count = preferred_count + 1
+      end
+    end
+  end
+
+  for _, client in ipairs(clients) do
+    if by_id[client.id] == nil then
+      table.insert(preferred, client)
+    end
+  end
+
+  return preferred, preferred_count
+end
+
+local function select_lsp_client(clients, make_request)
+  clients = vim.tbl_filter(supports_document_symbols, clients or {})
+  local preferred_count
+  clients, preferred_count = sort_clients_by_preference(clients)
+
+  if #clients == 0 then
+    return false
+  elseif #clients == 1 or preferred_count > 0 then
+    make_request(clients[1])
+  else
+    choose_lsp_menu(clients, make_request)
+  end
+
+  return true
+end
+
+local function request_buffer(for_buf, handler, opts)
   local function make_request(client)
     navic.request_symbol(for_buf, function(bufnr, symbols)
       navic.update_data(bufnr, symbols)
@@ -336,33 +418,8 @@ local function request(for_buf, handler, opts)
     end, client)
   end
 
-  if navbuddy_attached_clients[for_buf] == nil then
+  if not select_lsp_client(navbuddy_attached_clients[for_buf], make_request) then
     vim.notify("No lsp servers attached", vim.log.levels.ERROR)
-  elseif #navbuddy_attached_clients[for_buf] == 1 then
-    make_request(navbuddy_attached_clients[for_buf][1])
-  elseif config.lsp.preference ~= nil then
-    local found = false
-
-    for _, preferred_lsp in ipairs(config.lsp.preference) do
-      for _, attached_lsp in ipairs(navbuddy_attached_clients[for_buf]) do
-        if preferred_lsp == attached_lsp.name then
-          navbuddy_attached_clients[for_buf] = { attached_lsp }
-          found = true
-          make_request(attached_lsp)
-          break
-        end
-      end
-
-      if found then
-        break
-      end
-    end
-
-    if not found then
-      choose_lsp_menu(for_buf, make_request)
-    end
-  else
-    choose_lsp_menu(for_buf, make_request)
   end
 end
 
@@ -402,6 +459,7 @@ local function handler(bufnr, curr_node, lsp_name, opts)
   display.new({
     for_buf = bufnr,
     for_win = vim.api.nvim_get_current_win(),
+    start_buf = bufnr,
     start_cursor = vim.api.nvim_win_get_cursor(vim.api.nvim_get_current_win()),
     focus_node = curr_node,
     config = config,
@@ -409,22 +467,118 @@ local function handler(bufnr, curr_node, lsp_name, opts)
   })
 end
 
+local function active_clients_for_workspace(bufnr)
+  local clients = {}
+  local seen = {}
+  local current_path = vim.api.nvim_buf_get_name(bufnr)
+  if current_path == "" then
+    current_path = vim.fn.getcwd()
+  end
+
+  local function add(client)
+    if client and seen[client.id] == nil and supports_document_symbols(client) then
+      seen[client.id] = true
+      table.insert(clients, client)
+    end
+  end
+
+  for _, client in ipairs(navbuddy_attached_clients[bufnr] or {}) do
+    add(client)
+  end
+
+  for _, client in ipairs(vim.lsp.get_clients({ bufnr = bufnr })) do
+    add(client)
+  end
+
+  for _, client in ipairs(vim.lsp.get_clients()) do
+    if workspace.client_contains(client, current_path) then
+      add(client)
+    end
+  end
+
+  return clients
+end
+
+local function first_child(root)
+  if root.children and root.children[1] then
+    return root.children[1]
+  end
+  return nil
+end
+
+local function apply_root_opt(node, opts)
+  while opts.root and node and node.parent and not node.parent.is_root do
+    node = node.parent
+  end
+  return node
+end
+
+local function open_workspace(bufnr, opts, fallback)
+  if config.workspace.enabled == false then
+    fallback()
+    return
+  end
+
+  local function make_request(client)
+    local session = workspace.new(client, bufnr, config)
+    local root = session:build()
+    local file_node = session:file_node_for_buf(bufnr)
+    local source_win = vim.api.nvim_get_current_win()
+    local start_cursor = vim.api.nvim_win_get_cursor(source_win)
+
+    local function open_with_focus(focus_node)
+      focus_node = apply_root_opt(focus_node, opts)
+      if not focus_node then
+        vim.notify("Navbuddy workspace is empty", vim.log.levels.ERROR)
+        return
+      end
+
+      display.new({
+        for_buf = bufnr,
+        for_win = source_win,
+        start_buf = bufnr,
+        start_cursor = start_cursor,
+        focus_node = focus_node,
+        config = config,
+        lsp_name = client.name,
+        workspace = session,
+      })
+    end
+
+    if file_node then
+      session:load_symbols(file_node, function(loaded_file)
+        open_with_focus(session:closest_symbol(loaded_file, start_cursor))
+      end)
+    else
+      open_with_focus(first_child(root))
+    end
+  end
+
+  if not select_lsp_client(active_clients_for_workspace(bufnr), make_request) then
+    fallback()
+  end
+end
+
 local navbuddy = {}
 
 local function setup_commands()
   local get_complete = function()
-    return { "root" }
+    return { "root", "buffer", "workspace" }
   end
 
   vim.api.nvim_create_user_command("Navbuddy", function(cmd)
     ---@type Navbuddy.openOpts
     local opts = {}
-    if cmd.fargs[1] == "root" then
-      opts.root = true
+    for _, arg in ipairs(cmd.fargs) do
+      if arg == "root" then
+        opts.root = true
+      elseif arg == "buffer" or arg == "workspace" then
+        opts.scope = arg
+      end
     end
 
     navbuddy.open(opts)
-  end, { nargs = "?", complete = get_complete, desc = "Navbuddy" })
+  end, { nargs = "*", complete = get_complete, desc = "Navbuddy" })
 end
 
 ---@text API
@@ -469,6 +623,10 @@ function navbuddy.setup(user_config)
       config.lsp = vim.tbl_deep_extend("keep", user_config.lsp, config.lsp)
     end
 
+    if user_config.workspace ~= nil then
+      config.workspace = vim.tbl_deep_extend("keep", user_config.workspace, config.workspace)
+    end
+
     if user_config.source_buffer ~= nil then
       config.source_buffer = vim.tbl_deep_extend("keep", user_config.source_buffer, config.source_buffer)
     end
@@ -484,7 +642,7 @@ function navbuddy.setup(user_config)
     vim.api.nvim_create_autocmd("LspAttach", {
       callback = function(args)
         local bufnr = args.buf
-        if args.data == nil and args.data.client_id == nil then
+        if args.data == nil or args.data.client_id == nil then
           return
         end
         local client = vim.lsp.get_client_by_id(args.data.client_id)
@@ -503,9 +661,7 @@ function navbuddy.setup(user_config)
     end, all_clients)
 
     for _, client in ipairs(supported_clients) do
-      local buffers_of_client = vim.lsp.get_buffers_by_client_id(client.id)
-
-      for _, buffer_number in ipairs(buffers_of_client) do
+      for buffer_number, _ in pairs(client.attached_buffers or {}) do
         navbuddy.attach(client, buffer_number)
       end
     end
@@ -528,7 +684,17 @@ function navbuddy.open(opts)
 
   opts = type(opts) == "table" and opts or {}
 
-  request(bufnr, handler, opts)
+  if opts.scope == "buffer" then
+    request_buffer(bufnr, handler, opts)
+  else
+    open_workspace(bufnr, opts, function()
+      if opts.scope == "workspace" then
+        vim.notify("No workspace lsp servers attached", vim.log.levels.ERROR)
+        return
+      end
+      request_buffer(bufnr, handler, opts)
+    end)
+  end
 end
 
 ---@param client vim.lsp.Client

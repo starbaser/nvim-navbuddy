@@ -31,7 +31,7 @@ function M.find(opts, display)
           text = node.name,
           pos = { node.name_range["start"].line, node.name_range["start"].character },
           end_pos = { node.name_range["end"].line, node.name_range["end"].character },
-          file = vim.api.nvim_buf_get_name(display.for_buf),
+          file = node.filename or vim.api.nvim_buf_get_name(display.for_buf),
         })
       end
 

@@ -4,6 +4,21 @@ local ui = require("nvim-navbuddy.ui")
 
 local ns = vim.api.nvim_create_namespace("nvim-navbuddy")
 
+local function is_symbol_node(node)
+  return node.node_type == nil or node.node_type == "symbol"
+end
+
+local function can_expand(node)
+  return node.children ~= nil or (node.node_type == "file" and not node.symbols_loaded)
+end
+
+local function node_icon(node, config)
+  if node.node_type == "directory" or node.node_type == "workspace" then
+    return "󰉋 "
+  end
+  return config.icons[node.kind]
+end
+
 local function resolve_pct(spec, total)
   if type(spec) == "number" then
     return spec
@@ -72,7 +87,7 @@ local function fill_buffer(pane, node, config)
 
   local lines = {}
   for _, child_node in ipairs(parent.children) do
-    local text = " " .. config.icons[child_node.kind] .. child_node.name
+    local text = " " .. node_icon(child_node, config) .. child_node.name
     table.insert(lines, text)
   end
 
@@ -91,7 +106,7 @@ local function fill_buffer(pane, node, config)
       vim.api.nvim_buf_set_extmark(pane.bufnr, ns, i - 1, #lines[i], {
         virt_text = {
           {
-            child_node.children ~= nil and config.node_markers.icons.branch
+            can_expand(child_node) and config.node_markers.icons.branch
               or i == cursor_pos[1] and config.node_markers.icons.leaf_selected
               or config.node_markers.icons.leaf,
             i == cursor_pos[1] and { "NavbuddyCursorLine", hl_group } or hl_group,
@@ -117,9 +132,11 @@ end
 ---@field config Navbuddy.config
 ---@field for_buf number
 ---@field for_win number
+---@field start_buf number
 ---@field start_cursor integer[] # (row, col) tuple
 ---@field focus_node Navbuddy.symbolNode
 ---@field lsp_name string
+---@field workspace? table
 
 ---@private
 ---@class Navbuddy.display.state
@@ -127,6 +144,7 @@ end
 ---@field leaving_window_for_reorientation boolean
 ---@field closed boolean
 ---@field original_win integer
+---@field highlight_buf? number
 ---@field source_buffer_scrolloff? number
 ---@field user_gui_cursor? string
 
@@ -136,8 +154,10 @@ end
 ---@field lsp_name string
 ---@field for_buf number
 ---@field for_win number
+---@field start_buf number
 ---@field start_cursor integer[] # (row, col) tuple
 ---@field focus_node Navbuddy.symbolNode
+---@field workspace? table
 ---@field left Navbuddy.pane
 ---@field mid Navbuddy.pane
 ---@field state Navbuddy.display.state
@@ -157,8 +177,10 @@ function display.new(opts)
   self.lsp_name = opts.lsp_name
   self.for_buf = opts.for_buf
   self.for_win = opts.for_win
+  self.start_buf = opts.start_buf or opts.for_buf
   self.start_cursor = opts.start_cursor
   self.focus_node = opts.focus_node
+  self.workspace = opts.workspace
   self.state = {
     leaving_window_for_action = false,
     leaving_window_for_reorientation = false,
@@ -212,6 +234,7 @@ function display:init()
     buffer = self.mid.bufnr,
     callback = function()
       local cursor_pos = vim.api.nvim_win_get_cursor(self.mid.winid)
+      self:clear_highlights()
       if self.focus_node ~= self.focus_node.parent.children[cursor_pos[1]] then
         self.focus_node = self.focus_node.parent.children[cursor_pos[1]]
         self:redraw()
@@ -219,7 +242,6 @@ function display:init()
 
       self.focus_node.parent.memory = self.focus_node.index
 
-      self:clear_highlights()
       self:focus_range()
     end,
   })
@@ -264,16 +286,72 @@ function display:init()
   return self
 end
 
+function display:ensure_node_buffer(node)
+  if node.bufnr and vim.api.nvim_buf_is_valid(node.bufnr) then
+    return node.bufnr
+  end
+
+  if node.node_type == "file" and self.workspace then
+    return self.workspace:ensure_buffer(node)
+  end
+
+  if node.filename then
+    local bufnr = vim.fn.bufadd(node.filename)
+    pcall(vim.fn.bufload, bufnr)
+    node.bufnr = bufnr
+    return bufnr
+  end
+
+  if self.for_buf and vim.api.nvim_buf_is_valid(self.for_buf) then
+    return self.for_buf
+  end
+
+  return nil
+end
+
+function display:focus_file(node)
+  local bufnr = self:ensure_node_buffer(node)
+  if not bufnr then
+    return nil
+  end
+
+  if vim.api.nvim_win_is_valid(self.for_win) and vim.api.nvim_win_get_buf(self.for_win) ~= bufnr then
+    vim.api.nvim_win_set_buf(self.for_win, bufnr)
+  end
+
+  self.for_buf = bufnr
+  return bufnr
+end
+
 function display:focus_range()
+  local node = self.focus_node
+  if node.node_type == "directory" or node.node_type == "workspace" then
+    return
+  end
+
+  local bufnr = self:focus_file(node)
+  if not bufnr then
+    return
+  end
+
+  if node.node_type == "file" then
+    if self.config.source_buffer.follow_node then
+      vim.api.nvim_win_set_cursor(self.for_win, { 1, 0 })
+      self:reorient(self.for_win, "top")
+    end
+    return
+  end
+
   local ranges = nil
 
-  if vim.deep_equal(self.focus_node.scope, self.focus_node.name_range) then
-    ranges = { { "NavbuddyScope", self.focus_node.scope } }
+  if vim.deep_equal(node.scope, node.name_range) then
+    ranges = { { "NavbuddyScope", node.scope } }
   else
-    ranges = { { "NavbuddyScope", self.focus_node.scope }, { "NavbuddyName", self.focus_node.name_range } }
+    ranges = { { "NavbuddyScope", node.scope }, { "NavbuddyName", node.name_range } }
   end
 
   if self.config.source_buffer.highlight then
+    self.state.highlight_buf = bufnr
     for _, v in ipairs(ranges) do
       local highlight = v[1] --[[@as string]]
       local range = v[2] --[[@as Range]]
@@ -293,6 +371,18 @@ function display:focus_range()
 end
 
 function display:reorient(ro_win, reorient_method)
+  if not is_symbol_node(self.focus_node) then
+    if reorient_method == "top" then
+      vim.api.nvim_win_set_cursor(ro_win, { 1, 0 })
+      self.state.leaving_window_for_reorientation = true
+      vim.api.nvim_set_current_win(ro_win)
+      vim.api.nvim_command("normal! zt")
+      vim.api.nvim_set_current_win(self.mid.winid)
+      self.state.leaving_window_for_reorientation = false
+    end
+    return
+  end
+
   vim.api.nvim_win_set_cursor(
     ro_win,
     { self.focus_node.name_range["start"].line, self.focus_node.name_range["start"].character }
@@ -326,7 +416,14 @@ function display:reorient(ro_win, reorient_method)
 end
 
 function display:clear_highlights()
-  vim.api.nvim_buf_clear_namespace(self.for_buf, ns, 0, -1)
+  local cleared = {}
+  for _, bufnr in ipairs({ self.state.highlight_buf, self.for_buf }) do
+    if bufnr and not cleared[bufnr] and vim.api.nvim_buf_is_valid(bufnr) then
+      vim.api.nvim_buf_clear_namespace(bufnr, ns, 0, -1)
+      cleared[bufnr] = true
+    end
+  end
+  self.state.highlight_buf = nil
 end
 
 function display:redraw()

@@ -7,6 +7,104 @@
 local utils = require("nvim-navbuddy.utils")
 local actions = {}
 
+local function is_symbol_node(node)
+  return node.node_type == nil or node.node_type == "symbol"
+end
+
+local function is_container_node(node)
+  return node.node_type == "directory" or node.node_type == "workspace"
+end
+
+local function notify_no_children(node)
+  if node.node_type == "file" then
+    vim.notify("Navbuddy found no symbols in " .. node.name, vim.log.levels.WARN)
+  end
+end
+
+local function require_symbol(display)
+  if not is_symbol_node(display.focus_node) then
+    vim.notify("Navbuddy action only works on symbols", vim.log.levels.WARN)
+    return nil
+  end
+  return display:focus_file(display.focus_node)
+end
+
+local function clamp_cursor(bufnr, cursor)
+  local line_count = vim.api.nvim_buf_line_count(bufnr)
+  return { math.min(math.max(cursor[1], 1), line_count), cursor[2] }
+end
+
+local function redraw(display)
+  display:clear_highlights()
+  display:redraw()
+  display:focus_range()
+end
+
+local function reorient(winid, node, method)
+  if not is_symbol_node(node) then
+    vim.api.nvim_win_set_cursor(winid, { 1, 0 })
+    vim.api.nvim_command("normal! zt")
+    return
+  end
+
+  vim.api.nvim_win_set_cursor(winid, { node.name_range["start"].line, node.name_range["start"].character })
+
+  if method == "smart" then
+    local total_lines = node.scope["end"].line - node.scope["start"].line + 1
+
+    if total_lines >= vim.api.nvim_win_get_height(winid) then
+      vim.api.nvim_command("normal! zt")
+    else
+      local mid_line = bit.rshift(node.scope["start"].line + node.scope["end"].line, 1)
+      vim.api.nvim_win_set_cursor(winid, { mid_line, 0 })
+      vim.api.nvim_command("normal! zz")
+      vim.api.nvim_win_set_cursor(winid, { node.name_range["start"].line, node.name_range["start"].character })
+    end
+  elseif method == "mid" then
+    vim.api.nvim_command("normal! zz")
+  elseif method == "top" then
+    vim.api.nvim_command("normal! zt")
+  end
+end
+
+local function select_node(display, split_cmd)
+  local node = display.focus_node
+
+  if is_container_node(node) then
+    actions.children().callback(display)
+    return
+  end
+
+  local bufnr = display:focus_file(node)
+  if not bufnr then
+    return
+  end
+
+  local target_win = display.for_win
+  display:close()
+
+  if not vim.api.nvim_win_is_valid(target_win) then
+    return
+  end
+
+  vim.api.nvim_set_current_win(target_win)
+  if split_cmd then
+    vim.api.nvim_command(split_cmd)
+    target_win = vim.api.nvim_get_current_win()
+  end
+
+  if vim.api.nvim_win_get_buf(target_win) ~= bufnr then
+    vim.api.nvim_win_set_buf(target_win, bufnr)
+  end
+
+  vim.api.nvim_win_set_cursor(
+    target_win,
+    clamp_cursor(bufnr, { node.name_range["start"].line, node.name_range["start"].character })
+  )
+  vim.api.nvim_command("normal! m'")
+  reorient(target_win, node, display.config.source_buffer.reorient)
+end
+
 local function fix_end_character_position(bufnr, name_range_or_scope)
   if
     name_range_or_scope["end"].character == 0
@@ -22,8 +120,14 @@ end
 --- Close the Navbuddy window and return cursor to original location.
 function actions.close()
   local callback = function(display)
+    local target_win = display.for_win
+    local start_buf = display.start_buf
+    local start_cursor = display.start_cursor
     display:close()
-    vim.api.nvim_win_set_cursor(display.for_win, display.start_cursor)
+    if vim.api.nvim_win_is_valid(target_win) and vim.api.nvim_buf_is_valid(start_buf) then
+      vim.api.nvim_win_set_buf(target_win, start_buf)
+      vim.api.nvim_win_set_cursor(target_win, clamp_cursor(start_buf, start_cursor))
+    end
   end
 
   return {
@@ -47,7 +151,7 @@ function actions.next_sibling()
       display.focus_node = next_node
     end
 
-    display:redraw()
+    redraw(display)
   end
 
   return {
@@ -71,7 +175,7 @@ function actions.previous_sibling()
       display.focus_node = prev_node
     end
 
-    display:redraw()
+    redraw(display)
   end
 
   return {
@@ -90,7 +194,7 @@ function actions.parent()
     local parent_node = display.focus_node.parent
     display.focus_node = parent_node
 
-    display:redraw()
+    redraw(display)
   end
 
   return {
@@ -102,7 +206,26 @@ end
 --- Move to children of current, right of current node, in Navbuddy window.
 function actions.children()
   local callback = function(display)
+    if display.focus_node.node_type == "file" and not display.focus_node.symbols_loaded and display.workspace then
+      local file_node = display.focus_node
+      display.workspace:load_symbols(file_node, function()
+        if display.state.closed then
+          return
+        end
+        if file_node.children == nil then
+          notify_no_children(file_node)
+          return
+        end
+        actions.children().callback(display)
+      end)
+      return
+    end
+
     if display.focus_node.children == nil then
+      if display.focus_node.node_type == "file" then
+        notify_no_children(display.focus_node)
+        return
+      end
       actions.select().callback(display)
       return
     end
@@ -115,7 +238,7 @@ function actions.children()
     end
     display.focus_node = child_node
 
-    display:redraw()
+    redraw(display)
   end
 
   return {
@@ -136,7 +259,7 @@ function actions.root()
       display.focus_node = display.focus_node.parent
     end
 
-    display:redraw()
+    redraw(display)
   end
 
   return {
@@ -148,37 +271,14 @@ end
 --- Goto currently focus node.
 function actions.select()
   local callback = function(display)
-    display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.name_range)
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
-    -- to push location to jumplist:
-    -- move display to start_cursor, set mark ', then move to new location
-    vim.api.nvim_win_set_cursor(display.for_win, display.start_cursor)
-    vim.api.nvim_command("normal! m'")
-    vim.api.nvim_win_set_cursor(
-      display.for_win,
-      { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
-    )
-
-    if display.config.source_buffer.reorient == "smart" then
-      local total_lines = display.focus_node.scope["end"].line - display.focus_node.scope["start"].line + 1
-
-      if total_lines >= vim.api.nvim_win_get_height(display.for_win) then
-        vim.api.nvim_command("normal! zt")
-      else
-        local mid_line = bit.rshift(display.focus_node.scope["start"].line + display.focus_node.scope["end"].line, 1)
-        vim.api.nvim_win_set_cursor(display.for_win, { mid_line, 0 })
-        vim.api.nvim_command("normal! zz")
-        vim.api.nvim_win_set_cursor(
-          display.for_win,
-          { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
-        )
+    if is_symbol_node(display.focus_node) then
+      local bufnr = display:focus_file(display.focus_node)
+      if bufnr then
+        fix_end_character_position(bufnr, display.focus_node.name_range)
+        fix_end_character_position(bufnr, display.focus_node.scope)
       end
-    elseif display.config.source_buffer.reorient == "mid" then
-      vim.api.nvim_command("normal! zz")
-    elseif display.config.source_buffer.reorient == "top" then
-      vim.api.nvim_command("normal! zt")
     end
+    select_node(display)
   end
 
   return {
@@ -190,8 +290,12 @@ end
 --- Yank the name of current node.
 function actions.yank_name()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.name_range)
+    fix_end_character_position(bufnr, display.focus_node.name_range)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
@@ -213,8 +317,12 @@ end
 --- Yank the scope of current node.
 function actions.yank_scope()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.scope["start"].line, display.focus_node.scope["start"].character }
@@ -236,8 +344,12 @@ end
 --- Visual select the name of current node.
 function actions.visual_name()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.name_range)
+    fix_end_character_position(bufnr, display.focus_node.name_range)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
@@ -258,8 +370,12 @@ end
 --- Visual select the scope of current node.
 function actions.visual_scope()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.scope["start"].line, display.focus_node.scope["start"].character }
@@ -280,8 +396,12 @@ end
 --- Start insert at begin of name.
 function actions.insert_name()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.name_range)
+    fix_end_character_position(bufnr, display.focus_node.name_range)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
@@ -298,8 +418,12 @@ end
 --- Start insert at begin of scope.
 function actions.insert_scope()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.scope["start"].line, display.focus_node.scope["start"].character }
@@ -316,8 +440,12 @@ end
 --- Start insert at end of name.
 function actions.append_name()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.name_range)
+    fix_end_character_position(bufnr, display.focus_node.name_range)
     vim.api.nvim_win_set_cursor(
       display.for_win,
       { display.focus_node.name_range["end"].line, display.focus_node.name_range["end"].character - 1 }
@@ -334,12 +462,16 @@ end
 --- Start insert at end of scope.
 function actions.append_scope()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     display:close()
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     if
       string.len(
         vim.api.nvim_buf_get_lines(
-          display.for_buf,
+          bufnr,
           display.focus_node.scope["end"].line - 1,
           display.focus_node.scope["end"].line,
           false
@@ -368,8 +500,15 @@ end
 --- Trigger lsp rename for currently focused node.
 function actions.rename()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     local target_win = display.for_win
     display:close()
+    if vim.api.nvim_win_get_buf(target_win) ~= bufnr then
+      vim.api.nvim_win_set_buf(target_win, bufnr)
+    end
     vim.api.nvim_win_set_cursor(
       target_win,
       { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
@@ -387,6 +526,10 @@ end
 --- Delete currently focused scope.
 function actions.delete()
   local callback = function(display)
+    if not is_symbol_node(display.focus_node) then
+      vim.notify("Navbuddy action only works on symbols", vim.log.levels.WARN)
+      return
+    end
     actions.visual_scope().callback(display)
     vim.api.nvim_command("normal! d")
   end
@@ -400,12 +543,16 @@ end
 --- Create fold for current scope. Requires fold methos to be "manual".
 function actions.fold_create()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     if vim.o.foldmethod ~= "manual" then
       vim.notify("Fold create action works only when foldmethod is 'manual'", vim.log.levels.ERROR)
       return
     end
 
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     display.state.leaving_window_for_action = true
     vim.api.nvim_set_current_win(display.for_win)
     vim.api.nvim_win_set_cursor(
@@ -431,12 +578,16 @@ end
 --- Delete fold for current scope. Requires fold methos to be "manual".
 function actions.fold_delete()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     if vim.o.foldmethod ~= "manual" then
       vim.notify("Fold delete action works only when foldmethod is 'manual'", vim.log.levels.ERROR)
       return
     end
 
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     display.state.leaving_window_for_action = true
     vim.api.nvim_set_current_win(display.for_win)
     vim.api.nvim_win_set_cursor(
@@ -462,24 +613,28 @@ end
 --- Comment selected scope. Require Comment.nvim plugin to be installed.
 function actions.comment()
   local callback = function(display)
+    local bufnr = require_symbol(display)
+    if not bufnr then
+      return
+    end
     local status_ok, comment = pcall(require, "Comment.api")
     if not status_ok then
       vim.notify("Comment.nvim not found", vim.log.levels.ERROR)
       return
     end
 
-    fix_end_character_position(display.for_buf, display.focus_node.scope)
+    fix_end_character_position(bufnr, display.focus_node.scope)
     display.state.leaving_window_for_action = true
     vim.api.nvim_set_current_win(display.for_win)
     vim.api.nvim_buf_set_mark(
-      display.for_buf,
+      bufnr,
       "<",
       display.focus_node.scope["start"].line,
       display.focus_node.scope["start"].character,
       {}
     )
     vim.api.nvim_buf_set_mark(
-      display.for_buf,
+      bufnr,
       ">",
       display.focus_node.scope["end"].line,
       display.focus_node.scope["end"].character,
@@ -577,9 +732,14 @@ function actions.move_down()
       return
     end
 
-    swap_nodes(display.for_buf, display.focus_node, display.focus_node.next)
+    local bufnr = require_symbol(display)
+    if not bufnr or not is_symbol_node(display.focus_node.next) then
+      return
+    end
 
-    display:redraw()
+    swap_nodes(bufnr, display.focus_node, display.focus_node.next)
+
+    redraw(display)
   end
 
   return {
@@ -596,9 +756,14 @@ function actions.move_up()
       return
     end
 
-    swap_nodes(display.for_buf, display.focus_node.prev, display.focus_node)
+    local bufnr = require_symbol(display)
+    if not bufnr or not is_symbol_node(display.focus_node.prev) then
+      return
+    end
 
-    display:redraw()
+    swap_nodes(bufnr, display.focus_node.prev, display.focus_node)
+
+    redraw(display)
   end
 
   return {
@@ -612,10 +777,7 @@ end
 --- NOTE: Direction of split is controlled by 'splitright'
 function actions.vsplit()
   local callback = function(display)
-    actions.close().callback(display)
-    vim.api.nvim_command("vsplit")
-    display.for_win = vim.api.nvim_get_current_win()
-    actions.select().callback(display)
+    select_node(display, "vsplit")
     vim.api.nvim_command("normal! zv")
   end
 
@@ -629,10 +791,7 @@ end
 --- NOTE: Direction of split is controlled by 'splitbelow'
 function actions.hsplit()
   local callback = function(display)
-    actions.close().callback(display)
-    vim.api.nvim_command("split")
-    display.for_win = vim.api.nvim_get_current_win()
-    actions.select().callback(display)
+    select_node(display, "split")
     vim.api.nvim_command("normal! zv")
   end
 
@@ -682,33 +841,6 @@ function actions.help()
   local callback = function(display)
     display:close()
 
-    local nui_popup = require("nui.popup")
-
-    local help_popup = nui_popup({
-      relative = "editor",
-      position = display.config.window.position,
-      size = display.config.window.size,
-      enter = true,
-      focusable = true,
-      border = display.config.window.border,
-      win_options = {
-        winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder",
-      },
-      buf_options = {
-        modifiable = false,
-      },
-    })
-
-    local function quit_help()
-      help_popup:unmount()
-      require("nvim-navbuddy.display").new(display)
-    end
-
-    help_popup:map("n", "q", quit_help)
-    help_popup:map("n", "<esc>", quit_help)
-
-    help_popup:mount()
-
     local max_keybinding_len = 0
     for k, _ in pairs(display.config.mappings) do
       max_keybinding_len = math.max(#k, max_keybinding_len)
@@ -720,23 +852,46 @@ function actions.help()
       table.insert(lines, text)
     end
     table.sort(lines)
-    table.insert(
-      lines,
-      1,
-      " Navbuddy Mappings"
-        .. string.rep(" ", math.max(1, vim.api.nvim_win_get_width(help_popup.winid) - 18 * 2))
-        .. "press 'q' to exit "
-    )
-    table.insert(lines, 2, string.rep("-", vim.api.nvim_win_get_width(help_popup.winid)))
 
-    vim.bo[help_popup.bufnr].modifiable = true
-    vim.api.nvim_buf_set_lines(help_popup.bufnr, 0, -1, false, lines)
-    vim.bo[help_popup.bufnr].modifiable = false
+    local width = math.min(math.max(50, max_keybinding_len + 40), math.floor(vim.o.columns * 0.8))
+    local height = math.min(#lines + 2, math.floor(vim.o.lines * 0.6))
+    table.insert(lines, 1, " Navbuddy Mappings" .. string.rep(" ", math.max(1, width - 36)) .. "press 'q' to exit ")
+    table.insert(lines, 2, string.rep("-", width))
+
+    local bufnr = vim.api.nvim_create_buf(false, true)
+    vim.bo[bufnr].bufhidden = "wipe"
+    vim.bo[bufnr].buftype = "nofile"
+    vim.bo[bufnr].swapfile = false
+    vim.bo[bufnr].modifiable = true
+    vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, lines)
+    vim.bo[bufnr].modifiable = false
+
+    local winid = vim.api.nvim_open_win(bufnr, true, {
+      relative = "editor",
+      width = width,
+      height = height,
+      row = math.floor((vim.o.lines - height) / 2),
+      col = math.floor((vim.o.columns - width) / 2),
+      border = "single",
+      style = "minimal",
+    })
+
+    vim.wo[winid].winhighlight = "Normal:NavbuddyNormalFloat,FloatBorder:NavbuddyFloatBorder"
+
+    local function quit_help()
+      if vim.api.nvim_win_is_valid(winid) then
+        vim.api.nvim_win_close(winid, true)
+      end
+      require("nvim-navbuddy.display").new(display)
+    end
+
+    vim.keymap.set("n", "q", quit_help, { buffer = bufnr, nowait = true })
+    vim.keymap.set("n", "<esc>", quit_help, { buffer = bufnr, nowait = true })
 
     local help_ns = vim.api.nvim_create_namespace("nvim-navbuddy-help")
-    vim.hl.range(help_popup.bufnr, help_ns, "NavbuddyFunction", { 0, 0 }, { 0, -1 })
+    vim.hl.range(bufnr, help_ns, "NavbuddyFunction", { 0, 0 }, { 0, -1 })
     for i = 2, #lines do
-      vim.hl.range(help_popup.bufnr, help_ns, "NavbuddyKey", { i - 1, 0 }, { i - 1, max_keybinding_len + 3 })
+      vim.hl.range(bufnr, help_ns, "NavbuddyKey", { i - 1, 0 }, { i - 1, max_keybinding_len + 3 })
     end
   end
 

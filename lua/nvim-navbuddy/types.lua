@@ -27,6 +27,11 @@
 ---@field auto_attach? boolean
 ---@field preference? string[]
 
+---@class WorkspaceConfig
+---@field enabled? boolean
+---@field max_files? integer
+---@field exclude_dirs? string[]
+
 ---@class KeyMapping
 ---@field callback fun(display: table)
 ---@field description string
@@ -44,6 +49,7 @@
 ---@field use_default_mappings? boolean
 ---@field mappings? table<string, KeyMapping>
 ---@field lsp? LspConfig
+---@field workspace? WorkspaceConfig
 ---@field source_buffer? SourceBufferConfig
 ---@field custom_hl_group? string
 ---@field integrations? Integrations Which integrations to enable
@@ -51,6 +57,7 @@
 ---@class Navbuddy.openOpts
 ---@field root? boolean
 ---@field bufnr? number
+---@field scope? "workspace"|"buffer"
 
 ---@class RangePosition
 ---@field character integer
@@ -62,10 +69,16 @@
 
 ---@class Navbuddy.symbolNode
 ---@field is_root? boolean
+---@field node_type? "workspace"|"directory"|"file"|"symbol"
 ---@field index integer
 ---@field memory? integer
 ---@field kind integer
 ---@field name string
+---@field filename? string
+---@field uri? string
+---@field bufnr? integer
+---@field symbols_loaded? boolean
+---@field symbols_loading? boolean
 ---@field name_range Range
 ---@field prev? Navbuddy.symbolNode
 ---@field next? Navbuddy.symbolNode
