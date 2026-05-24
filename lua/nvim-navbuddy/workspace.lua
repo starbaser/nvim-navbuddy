@@ -448,7 +448,36 @@ function Workspace:closest_symbol(file_node, cursor_pos)
     return true
   end
 
-  local best = file_node
+  local function distance_from_cursor(node)
+    local range = node.scope
+    if not range then
+      return math.huge
+    end
+    if line < range.start.line then
+      return range.start.line - line
+    end
+    if line > range["end"].line then
+      return line - range["end"].line
+    end
+    return 0
+  end
+
+  local function closest_child(parent)
+    local closest = nil
+    local closest_distance = math.huge
+    for _, child in ipairs(parent.children or {}) do
+      if child.node_type == "symbol" then
+        local distance = distance_from_cursor(child)
+        if distance < closest_distance then
+          closest = child
+          closest_distance = distance
+        end
+      end
+    end
+    return closest
+  end
+
+  local best = closest_child(file_node) or file_node
   local node = file_node
   while true do
     local descended = false
