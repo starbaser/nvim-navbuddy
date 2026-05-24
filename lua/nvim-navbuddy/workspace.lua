@@ -339,6 +339,11 @@ function Workspace:file_node_for_buf(bufnr)
   return self.files[filename]
 end
 
+function Workspace:file_node_for_uri(uri)
+  local filename = normalize(vim.uri_to_fname(uri))
+  return self.files[filename]
+end
+
 function Workspace:ensure_buffer(file_node)
   if file_node.bufnr and vim.api.nvim_buf_is_valid(file_node.bufnr) then
     return file_node.bufnr

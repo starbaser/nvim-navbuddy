@@ -96,6 +96,239 @@ local function select_node(display, split_cmd)
   reorient(target_win, node, display.config.source_buffer.reorient)
 end
 
+local MAX_DEFINITION_SCAN_LINES = 5
+
+local function client_for(display, bufnr, capability)
+  local clients = vim.lsp.get_clients({ bufnr = bufnr })
+  local fallback
+
+  for _, client in ipairs(clients) do
+    local capabilities = client.server_capabilities or {}
+    if not capability or capabilities[capability] then
+      fallback = fallback or client
+      if client.name == display.lsp_name then
+        return client
+      end
+    end
+  end
+
+  return fallback
+end
+
+local function add_definition_position(positions, seen, line, character)
+  if line < 1 or character < 0 then
+    return
+  end
+
+  local key = line .. ":" .. character
+  if seen[key] then
+    return
+  end
+
+  seen[key] = true
+  table.insert(positions, {
+    line = line - 1,
+    character = character,
+  })
+end
+
+local function candidate_definition_positions(bufnr, node)
+  local positions = {}
+  local seen = {}
+
+  if node.name_range and node.name_range.start then
+    add_definition_position(positions, seen, node.name_range.start.line, node.name_range.start.character)
+  end
+
+  if not node.scope or not node.scope.start or not node.scope["end"] then
+    return positions
+  end
+
+  local start_line = node.scope.start.line
+  local end_line = node.scope["end"].line
+  if end_line < start_line or end_line - start_line + 1 > MAX_DEFINITION_SCAN_LINES then
+    return positions
+  end
+
+  local lines = vim.api.nvim_buf_get_lines(bufnr, start_line - 1, end_line, false)
+  for i, line in ipairs(lines) do
+    local line_nr = start_line + i - 1
+    local start_col = line_nr == start_line and node.scope.start.character or 0
+    local end_col = line_nr == end_line and node.scope["end"].character or #line
+    local segment = line:sub(start_col + 1, end_col)
+    local index = 1
+
+    while index <= #segment do
+      local quote_start, quote_end = segment:find("['\"]", index)
+      if not quote_start then
+        break
+      end
+
+      local quote = segment:sub(quote_start, quote_start)
+      local literal_end = segment:find(quote, quote_end + 1, true)
+      if not literal_end then
+        break
+      end
+
+      if literal_end > quote_end + 1 then
+        add_definition_position(positions, seen, line_nr, start_col + quote_end)
+      end
+      index = literal_end + 1
+    end
+  end
+
+  return positions
+end
+
+local function definition_file_node(display, node, result)
+  if not display.workspace or not result then
+    return nil
+  end
+
+  local locations = result
+  if result.uri or result.targetUri then
+    locations = { result }
+  end
+
+  for _, location in ipairs(locations) do
+    local uri = location.targetUri or location.uri
+    local file_node = uri and display.workspace:file_node_for_uri(uri)
+    if file_node and file_node.filename ~= node.filename then
+      return file_node
+    end
+  end
+
+  return nil
+end
+
+local function resolve_node_definition_target(display, node, done)
+  local bufnr = display:ensure_node_buffer(node)
+  if not bufnr then
+    done(nil)
+    return
+  end
+
+  local client = client_for(display, bufnr, "definitionProvider")
+  if not client then
+    done(nil)
+    return
+  end
+
+  local positions = candidate_definition_positions(bufnr, node)
+  local index = 0
+
+  local function request_next()
+    if display.state.closed then
+      done(nil)
+      return
+    end
+
+    index = index + 1
+    local position = positions[index]
+    if not position then
+      done(nil)
+      return
+    end
+
+    client:request("textDocument/definition", {
+      textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+      position = position,
+    }, function(err, result)
+      vim.schedule(function()
+        if err then
+          request_next()
+          return
+        end
+
+        local file_node = definition_file_node(display, node, result)
+        if file_node then
+          done(file_node)
+          return
+        end
+
+        request_next()
+      end)
+    end, bufnr)
+  end
+
+  request_next()
+end
+
+local function finish_definition_target_scan(parent)
+  parent._definition_targets_scanning = false
+  parent._definition_targets_loaded = true
+
+  local callbacks = parent._definition_target_callbacks or {}
+  parent._definition_target_callbacks = nil
+  for _, callback in ipairs(callbacks) do
+    callback()
+  end
+end
+
+local function try_follow_definition_target(display, done)
+  local node = display.focus_node
+  local parent = node.parent
+  if not display.workspace or not is_symbol_node(node) or not parent or not parent.children then
+    return false
+  end
+
+  local function follow_if_available()
+    if display.state.closed or display.focus_node ~= node then
+      return
+    end
+
+    local file_node = node._definition_file_node
+    if not file_node then
+      done(false)
+      return
+    end
+
+    display.focus_node = file_node
+    done(true)
+  end
+
+  if parent._definition_targets_loaded then
+    if node._definition_file_node then
+      follow_if_available()
+      return true
+    end
+    return false
+  end
+
+  parent._definition_target_callbacks = parent._definition_target_callbacks or {}
+  table.insert(parent._definition_target_callbacks, follow_if_available)
+  if parent._definition_targets_scanning then
+    return true
+  end
+
+  parent._definition_targets_scanning = true
+
+  local scan_nodes = {}
+  for _, child in ipairs(parent.children) do
+    if is_symbol_node(child) and child.children == nil then
+      table.insert(scan_nodes, child)
+    end
+  end
+
+  local remaining = #scan_nodes
+  if remaining == 0 then
+    finish_definition_target_scan(parent)
+    return true
+  end
+
+  for _, child in ipairs(scan_nodes) do
+    resolve_node_definition_target(display, child, function(file_node)
+      child._definition_file_node = file_node
+      remaining = remaining - 1
+      if remaining == 0 then
+        finish_definition_target_scan(parent)
+      end
+    end)
+  end
+
+  return true
+end
+
 local function fix_end_character_position(bufnr, name_range_or_scope)
   if
     name_range_or_scope["end"].character == 0
@@ -217,6 +450,20 @@ function actions.children()
         notify_no_children(display.focus_node)
         return
       end
+
+      local leaf_node = display.focus_node
+      if
+        try_follow_definition_target(display, function(followed)
+          if followed then
+            actions.children().callback(display)
+          elseif not display.state.closed and display.focus_node == leaf_node then
+            actions.select().callback(display)
+          end
+        end)
+      then
+        return
+      end
+
       actions.select().callback(display)
       return
     end
