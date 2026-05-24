@@ -27,6 +27,22 @@ function M.is_container_node(node)
 end
 
 ---@param bufnr integer
+function M.ensure_filetype(bufnr)
+  if not vim.api.nvim_buf_is_valid(bufnr) or not vim.api.nvim_buf_is_loaded(bufnr) or vim.bo[bufnr].filetype ~= "" then
+    return
+  end
+
+  local filetype = vim.filetype and vim.filetype.match({ buf = bufnr })
+  vim.api.nvim_buf_call(bufnr, function()
+    if filetype and filetype ~= "" then
+      vim.cmd("setfiletype " .. filetype)
+    else
+      vim.cmd("silent! filetype detect")
+    end
+  end)
+end
+
+---@param bufnr integer
 ---@param cursor integer[]
 ---@return integer[]
 function M.clamp_cursor(bufnr, cursor)

@@ -295,6 +295,8 @@ end
 
 function display:ensure_node_buffer(node)
   if node.bufnr and vim.api.nvim_buf_is_valid(node.bufnr) then
+    pcall(vim.fn.bufload, node.bufnr)
+    utils.ensure_filetype(node.bufnr)
     return node.bufnr
   end
 
@@ -305,6 +307,7 @@ function display:ensure_node_buffer(node)
   if node.filename then
     local bufnr = vim.fn.bufadd(node.filename)
     pcall(vim.fn.bufload, bufnr)
+    utils.ensure_filetype(bufnr)
     node.bufnr = bufnr
     return bufnr
   end

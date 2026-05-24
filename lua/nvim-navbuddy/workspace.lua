@@ -45,13 +45,18 @@ local function node_range()
   }
 end
 
+---@param node table
+---@return Navbuddy.symbolNode
 local function make_node(node)
   node.kind = node.kind or SymbolKind.File
   node.name_range = node.name_range or node_range()
   node.scope = node.scope or node_range()
-  return node
+  return node --[[@as Navbuddy.symbolNode]]
 end
 
+---@param a Navbuddy.symbolNode
+---@param b Navbuddy.symbolNode
+---@return boolean
 local function dirs_first_then_alpha(a, b)
   if a.node_type ~= b.node_type then
     if a.node_type == "directory" then
@@ -63,6 +68,7 @@ local function dirs_first_then_alpha(a, b)
   return a.name:lower() < b.name:lower()
 end
 
+---@param node Navbuddy.symbolNode
 local function link_children(node)
   if not node.children then
     return
@@ -346,11 +352,14 @@ end
 
 function Workspace:ensure_buffer(file_node)
   if file_node.bufnr and vim.api.nvim_buf_is_valid(file_node.bufnr) then
+    pcall(vim.fn.bufload, file_node.bufnr)
+    utils.ensure_filetype(file_node.bufnr)
     return file_node.bufnr
   end
 
   local bufnr = vim.fn.bufadd(file_node.filename)
   pcall(vim.fn.bufload, bufnr)
+  utils.ensure_filetype(bufnr)
   file_node.bufnr = bufnr
   return bufnr
 end
