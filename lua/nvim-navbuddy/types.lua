@@ -46,6 +46,7 @@
 
 ---@class Navbuddy.config
 ---@field window? WindowConfig
+---@field autohide? boolean
 ---@field node_markers? NodeMarkersConfig
 ---@field icons? table<number, string>
 ---@field use_default_mappings? boolean

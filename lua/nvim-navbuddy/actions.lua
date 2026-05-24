@@ -360,6 +360,19 @@ function actions.close()
   }
 end
 
+function actions.toggle_autohide()
+  local callback = function(display)
+    display.config.autohide = not display.config.autohide
+    vim.g.navbuddy_autohide = display.config.autohide
+    vim.notify("Navbuddy autohide " .. (display.config.autohide and "enabled" or "disabled"))
+  end
+
+  return {
+    callback = callback,
+    description = "Toggle autohide",
+  }
+end
+
 --- Move to next_sibling, below current node, in Navbuddy window.
 function actions.next_sibling()
   local callback = function(display)

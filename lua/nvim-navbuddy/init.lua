@@ -155,6 +155,7 @@ local workspace = require("nvim-navbuddy.workspace")
 --minidoc_replace_start {
 local config = {
   --minidoc_replace_end
+  autohide = false,
   window = {
     height = "50%",          -- Height of the navbuddy strip ("NN%" of &lines, or absolute int).
     scrolloff = nil,         -- scrolloff value inside the navbuddy MID window
@@ -216,6 +217,7 @@ local config = {
   mappings = {
     ["<esc>"] = actions.close(),        -- Close and cursor to original location
     ["q"] = actions.close(),
+    ["H"] = actions.toggle_autohide(),  -- Toggle close on leaving Navbuddy
 
     ["j"] = actions.next_sibling(),     -- Go down
     ["k"] = actions.previous_sibling(), -- Go up
@@ -532,6 +534,18 @@ end
 
 local navbuddy = {}
 
+local function sync_autohide()
+  if vim.g.navbuddy_autohide == nil then
+    vim.g.navbuddy_autohide = config.autohide
+    return
+  end
+
+  config.autohide = vim.g.navbuddy_autohide == true
+    or vim.g.navbuddy_autohide == 1
+    or vim.g.navbuddy_autohide == "true"
+    or vim.g.navbuddy_autohide == "1"
+end
+
 local function setup_commands()
   local get_complete = function()
     return { "root", "buffer", "workspace" }
@@ -564,6 +578,10 @@ function navbuddy.setup(user_config)
   if user_config ~= nil then
     if user_config.window ~= nil then
       config.window = vim.tbl_deep_extend("keep", user_config.window, config.window)
+    end
+
+    if user_config.autohide ~= nil then
+      config.autohide = user_config.autohide
     end
 
     if user_config.node_markers ~= nil then
@@ -606,6 +624,8 @@ function navbuddy.setup(user_config)
       config.custom_hl_group = user_config.custom_hl_group
     end
   end
+
+  sync_autohide()
 
   if config.lsp.auto_attach == true then
     local navbuddy_augroup = vim.api.nvim_create_augroup("navbuddy", { clear = false })

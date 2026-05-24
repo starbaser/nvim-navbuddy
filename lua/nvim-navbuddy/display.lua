@@ -257,7 +257,8 @@ function display:init()
     buffer = self.mid.bufnr,
     callback = function()
       if
-        self.state.leaving_window_for_action == false
+        self.config.autohide == true
+        and self.state.leaving_window_for_action == false
         and self.state.leaving_window_for_reorientation == false
         and self.state.closed == false
       then
