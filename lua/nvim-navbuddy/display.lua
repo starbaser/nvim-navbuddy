@@ -198,7 +198,9 @@ function display.new(opts)
   local strip_height = resolve_pct(self.config.window.height, vim.o.lines)
   local left_width = resolve_pct(self.config.window.sections.left.width, vim.o.columns)
 
-  vim.cmd("botright " .. strip_height .. "split")
+  vim.api.nvim_set_current_win(self.for_win)
+
+  vim.cmd("rightbelow " .. strip_height .. "split")
   local mid_win = vim.api.nvim_get_current_win()
 
   vim.cmd("leftabove " .. left_width .. "vsplit")

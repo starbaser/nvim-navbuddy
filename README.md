@@ -1,7 +1,39 @@
+# 🗺️ `starbaser/nvim-navbuddy`
+
+## 🍴 About this fork
+
+This is a fork of [hasansujon786/nvim-navbuddy](https://github.com/hasansujon786/nvim-navbuddy)
+(itself a fork of [SmiteshP/nvim-navbuddy](https://github.com/SmiteshP/nvim-navbuddy)).
+
+### Features
+
+- **File and Workspac Navigation** `:Navbuddy workspace` walks the LSP workspace roots and presents
+  a directory/file tree alongside symbols, with lazy `documentSymbol` loading per file.
+  `workspace.default_scope` controls whether `:Navbuddy` defaults to buffer or workspace.
+- **Treesitter augmentation** layer (`augment/<filetype>.lua`) for languages where LSP omits
+  inner-scope symbols (function parameters, locals, range vars).
+  Go is implemented; the architecture is extensible.
+- **Bottom-of-window strip** instead of a configurable float.
+  A horizontal split is created inside the current window, divided into two panes (left = parent
+  context, mid = current node + siblings).
+
+### Dependency and breaking changes
+
+- **`nui.nvim` is no longer a dependency.** Layout uses native `vim.api` splits; the LSP-picker uses
+  `vim.ui.select`.
+- **Right-side preview pane removed** along with the `toggle_preview()` action and
+  `sections.right.*` config.
+- **Removed config keys:** `window.border`, `window.size`, `window.position`, `sections.*.border`,
+  `sections.right.preview`. See the config block below for current options.
+
+The rest of this README is adapted from upstream and remains substantively the same.
+
+* * *
+
 # 🗺️ nvim-navbuddy
 
-A simple popup display that provides breadcrumbs like navigation feature but
-in keyboard centric manner inspired by ranger file manager.
+A simple popup display that provides breadcrumbs like navigation feature but in keyboard centric
+manner inspired by ranger file manager.
 
 https://user-images.githubusercontent.com/43147494/227758807-13a614ff-a09d-4be0-8f6b-ac22f814ce6f.mp4
 
@@ -43,7 +75,8 @@ Plug "SmiteshP/nvim-navbuddy"
 
 If you want to lazy load navbuddy you need to load it before your Lsp related Stuff.
 
-For Example with [Lazy](https://github.com/folke/lazy.nvim) and [lspconfig](https://github.com/neovim/nvim-lspconfig)
+For Example with [Lazy](https://github.com/folke/lazy.nvim) and
+[lspconfig](https://github.com/neovim/nvim-lspconfig)
 
 ```lua
 return {
@@ -63,9 +96,9 @@ return {
 
 ## ⚙️ Setup
 
-nvim-navbuddy needs to be attached to lsp servers of the buffer to work. You can pass the
-navbuddy's `attach` function as `on_attach` while setting up the lsp server. You can skip this
-step if you have enabled `auto_attach` option in setup function.
+nvim-navbuddy needs to be attached to lsp servers of the buffer to work.
+You can pass the navbuddy’s `attach` function as `on_attach` while setting up the lsp server.
+You can skip this step if you have enabled `auto_attach` option in setup function.
 
 Example:
 ```lua
@@ -82,24 +115,42 @@ require("lspconfig").clangd.setup {
 
 Use `setup` to override any of the default options
 
-* `icons` : Indicate the type of symbol captured. Default icons assume you have nerd-fonts.
-* `node_markers` : Indicate whether a node is a leaf or branch node. Default icons assume you have nerd-fonts.
-* `window` : Set options related to the navbuddy strip — its `height`, `scrolloff`, and per-section `width` / `win_options` / `buf_options`.
-* `use_default_mappings`: If set to false, only mappings set by user are set. Else default mappings are used for keys that are not set by user.
-* `mappings` : Actions to be triggered for specified keybindings. For each keybinding it takes a table of format { callback = <function_to_be_called>, description = "string"}. The callback function takes the "display" object as an argument.
+* `icons` : Indicate the type of symbol captured.
+  Default icons assume you have nerd-fonts.
+* `node_markers` : Indicate whether a node is a leaf or branch node.
+  Default icons assume you have nerd-fonts.
+* `window` : Set options related to the navbuddy strip — its `height`, `scrolloff`, and per-section
+  `width` / `win_options` / `buf_options`.
+* `use_default_mappings`: If set to false, only mappings set by user are set.
+  Else default mappings are used for keys that are not set by user.
+* `mappings` : Actions to be triggered for specified keybindings.
+  For each keybinding it takes a table of format { callback = <function_to_be_called>, description =
+  "string"}. The callback function takes the “display” object as an argument.
 * `lsp` :
-    * `auto_attach` : Enable to have Navbuddy automatically attach to every LSP for current buffer. Its disabled by default.
-    * `preference` : Table ranking lsp_servers. Lower the index, higher the priority of the server. If there are more than one server attached to a buffer, navbuddy will refer to this list to make a decision on which one to use. for example - In case a buffer is attached to clangd and ccls both and the preference list is `{ "clangd", "pyright" }`. Then clangd will be prefered.
+  * `auto_attach` : Enable to have Navbuddy automatically attach to every LSP for current buffer.
+    Its disabled by default.
+  * `preference` : Table ranking lsp_servers. Lower the index, higher the priority of the server.
+    If there are more than one server attached to a buffer, navbuddy will refer to this list to make
+    a decision on which one to use.
+    for example - In case a buffer is attached to clangd and ccls both and the preference list is
+    `{ "clangd", "pyright" }`. Then clangd will be prefered.
 * `workspace` :
-    * `enabled` : Enable workspace-scope navigation across files in the LSP workspace roots. Default `true`.
-    * `default_scope` : `"auto"` (workspace if any LSP exposes one, else buffer), `"workspace"` (error if no workspace LSP), or `"buffer"`. Default `"auto"`.
-    * `max_files` : Hard cap on the workspace file scan. Default `5000`. A warning is shown if hit.
-    * `exclude_dirs` : Directory basenames skipped during the scan. Default includes `.git`, `node_modules`, `target`, `build`, `dist`, etc.
-    * `cache` : Reuse a single workspace tree across invocations. Symbol entries are invalidated on `BufWritePost` of the corresponding file. Default `false`.
+  * `enabled` : Enable workspace-scope navigation across files in the LSP workspace roots.
+    Default `true`.
+  * `default_scope` : `"auto"` (workspace if any LSP exposes one, else buffer), `"workspace"` (error
+    if no workspace LSP), or `"buffer"`. Default `"auto"`.
+  * `max_files` : Hard cap on the workspace file scan.
+    Default `5000`. A warning is shown if hit.
+  * `exclude_dirs` : Directory basenames skipped during the scan.
+    Default includes `.git`, `node_modules`, `target`, `build`, `dist`, etc.
+  * `cache` : Reuse a single workspace tree across invocations.
+    Symbol entries are invalidated on `BufWritePost` of the corresponding file.
+    Default `false`.
 * `source_buffer` :
-    * `follow_node` : Keep the current node in focus on the source buffer
-    * `highlight` : Highlight the currently focused node
-    * reorient: Reorient buffer after changing nodes. options are "smart", "top", "mid" or "none"
+  * `follow_node` : Keep the current node in focus on the source buffer
+  * `highlight` : Highlight the currently focused node
+  * reorient: Reorient buffer after changing nodes.
+    options are “smart”, “top”, “mid” or “none”
 
 ```lua
 local navbuddy = require("nvim-navbuddy")
@@ -241,7 +292,8 @@ navbuddy.setup {
 
 ## 🚀 Usage
 
-`Navbuddy` command opens navbuddy. By default the scope is `workspace.default_scope` (auto).
+`Navbuddy` command opens navbuddy.
+By default the scope is `workspace.default_scope` (auto).
 
 ```
 :Navbuddy             " Use configured default scope
@@ -260,13 +312,12 @@ And alternatively lua function `open` can also be used:
 
 ### Workspace navigation
 
-In workspace scope, navbuddy walks the LSP client's workspace roots, presenting
-directories and files alongside symbols. Selecting a directory drills in;
-selecting a file lazily fetches that file's symbols via
-`textDocument/documentSymbol` and lets you continue into them. The current
-file is auto-focused at the closest symbol to your cursor.
+In workspace scope, navbuddy walks the LSP client’s workspace roots, presenting directories and
+files alongside symbols.
+Selecting a directory drills in; selecting a file lazily fetches that file’s symbols via
+`textDocument/documentSymbol` and lets you continue into them.
+The current file is auto-focused at the closest symbol to your cursor.
 
-Tune behavior with `workspace.max_files`, `workspace.exclude_dirs`, and
-`workspace.cache`. On large monorepos the cache is recommended; it survives
-across invocations and is invalidated per-file on save.
-
+Tune behavior with `workspace.max_files`, `workspace.exclude_dirs`, and `workspace.cache`. On large
+monorepos the cache is recommended; it survives across invocations and is invalidated per-file on
+save.
