@@ -183,6 +183,7 @@ function M.new(client, anchor_bufnr, config)
     anchor_bufnr = anchor_bufnr,
     config = config,
     files = {},
+    external_files = {},
     truncated = false,
   }, Workspace)
 end
@@ -348,6 +349,51 @@ end
 function Workspace:file_node_for_uri(uri)
   local filename = normalize(vim.uri_to_fname(uri))
   return self.files[filename]
+end
+
+function Workspace:external_file_node_for_uri(uri)
+  local ok, filename = pcall(vim.uri_to_fname, uri)
+  if not ok then
+    return nil
+  end
+
+  filename = normalize(filename)
+  if not filename or filename == "" or self.files[filename] then
+    return self.files[filename]
+  end
+
+  local stat = uv.fs_stat(filename)
+  if not stat or stat.type ~= "file" then
+    return nil
+  end
+
+  self.external_files = self.external_files or {}
+  if self.external_files[filename] then
+    return self.external_files[filename]
+  end
+
+  local parent = make_node({
+    is_root = true,
+    node_type = "workspace",
+    name = basename(vim.fn.fnamemodify(filename, ":h")),
+    children = {},
+    index = 1,
+    kind = SymbolKind.Module,
+  })
+  local file_node = make_node({
+    node_type = "file",
+    name = basename(filename),
+    filename = filename,
+    uri = vim.uri_from_fname(filename),
+    parent = parent,
+    kind = SymbolKind.File,
+    symbols_loaded = false,
+    index = 1,
+  })
+
+  parent.children = { file_node }
+  self.external_files[filename] = file_node
+  return file_node
 end
 
 function Workspace:ensure_buffer(file_node)

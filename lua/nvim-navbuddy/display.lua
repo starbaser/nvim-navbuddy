@@ -136,6 +136,7 @@ end
 ---@field focus_node Navbuddy.symbolNode
 ---@field lsp_name string
 ---@field workspace? table
+---@field module_trail? Navbuddy.moduleTrailEntry[]
 
 ---@private
 ---@class Navbuddy.display.state
@@ -158,6 +159,7 @@ end
 ---@field start_cursor integer[] # (row, col) tuple
 ---@field focus_node Navbuddy.symbolNode
 ---@field workspace? table
+---@field module_trail Navbuddy.moduleTrailEntry[]
 ---@field left Navbuddy.pane
 ---@field mid Navbuddy.pane
 ---@field state Navbuddy.display.state
@@ -181,6 +183,10 @@ function display.new(opts)
   self.start_cursor = opts.start_cursor
   self.focus_node = opts.focus_node
   self.workspace = opts.workspace
+  self.module_trail = {}
+  for _, entry in ipairs(opts.module_trail or {}) do
+    table.insert(self.module_trail, entry)
+  end
   self.state = {
     leaving_window_for_action = false,
     leaving_window_for_reorientation = false,
@@ -318,6 +324,36 @@ function display:ensure_node_buffer(node)
   end
 
   return nil
+end
+
+---@param origin Navbuddy.symbolNode
+---@param target Navbuddy.symbolNode
+function display:push_module_trail(origin, target)
+  if not origin or not target then
+    return
+  end
+
+  local top = self.module_trail[#self.module_trail]
+  if top and top.origin == origin and top.target == target then
+    return
+  end
+
+  table.insert(self.module_trail, {
+    origin = origin,
+    target = target,
+  })
+end
+
+---@param node Navbuddy.symbolNode
+---@return Navbuddy.symbolNode|nil
+function display:pop_module_trail_target(node)
+  local top = self.module_trail[#self.module_trail]
+  if not top or (top.target ~= node and node.parent ~= top.target) then
+    return nil
+  end
+
+  table.remove(self.module_trail)
+  return top.origin
 end
 
 function display:focus_file(node)

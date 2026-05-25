@@ -193,6 +193,9 @@ local function definition_file_node(display, node, result)
   for _, location in ipairs(locations) do
     local uri = location.targetUri or location.uri
     local file_node = uri and display.workspace:file_node_for_uri(uri)
+    if not file_node and uri then
+      file_node = display.workspace:external_file_node_for_uri(uri)
+    end
     if file_node and file_node.filename ~= node.filename then
       return file_node
     end
@@ -283,6 +286,7 @@ local function try_follow_definition_target(display, done)
       return
     end
 
+    display:push_module_trail(node, file_node)
     display.focus_node = file_node
     done(true)
   end
@@ -424,6 +428,13 @@ end
 --- Move to parent of current, left of current node, in Navbuddy window.
 function actions.parent()
   local callback = function(display)
+    local origin_node = display:pop_module_trail_target(display.focus_node)
+    if origin_node then
+      display.focus_node = origin_node
+      redraw(display)
+      return
+    end
+
     if display.focus_node.parent.is_root then
       return
     end

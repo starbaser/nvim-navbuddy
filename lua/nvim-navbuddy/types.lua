@@ -89,6 +89,10 @@
 ---@field children? Navbuddy.symbolNode[]|nil
 ---@field parent? Navbuddy.symbolNode|nil
 
+---@class Navbuddy.moduleTrailEntry
+---@field origin Navbuddy.symbolNode
+---@field target Navbuddy.symbolNode
+
 ---@class Navbuddy.pane
 ---@field winid integer
 ---@field bufnr integer
