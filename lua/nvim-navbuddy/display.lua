@@ -35,6 +35,8 @@ local function resolve_pct(spec, total)
   error("navbuddy: invalid size " .. vim.inspect(spec))
 end
 
+---@param section_cfg WindowSectionConfig
+---@param opts { filetype?: string }
 local function configure_pane(winid, section_cfg, opts)
   local bufnr = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_win_set_buf(winid, bufnr)
@@ -54,10 +56,12 @@ local function configure_pane(winid, section_cfg, opts)
   vim.wo[winid].winhighlight = "Normal:NavbuddyNormalFloat"
   vim.wo[winid].winfixheight = true
   vim.wo[winid].winfixwidth = true
-  for k, v in pairs(section_cfg.win_options or {}) do
+  local win_options = section_cfg.win_options or {}
+  for k, v in pairs(win_options) do
     vim.wo[winid][k] = v
   end
-  for k, v in pairs(section_cfg.buf_options or {}) do
+  local buf_options = section_cfg.buf_options or {}
+  for k, v in pairs(buf_options) do
     vim.bo[bufnr][k] = v
   end
   return { winid = winid, bufnr = bufnr }
@@ -78,11 +82,17 @@ local function clear_buffer(pane)
   end
 end
 
+---@param pane Navbuddy.pane
+---@param node Navbuddy.symbolNode
+---@param config Navbuddy.config
 local function fill_buffer(pane, node, config)
   local cursor_pos = vim.api.nvim_win_get_cursor(pane.winid)
   clear_buffer(pane)
 
   local parent = node.parent
+  if not parent or not parent.children then
+    return
+  end
 
   local lines = {}
   for _, child_node in ipairs(parent.children) do
@@ -94,15 +104,22 @@ local function fill_buffer(pane, node, config)
   vim.api.nvim_buf_set_lines(pane.bufnr, 0, -1, false, lines)
   vim.bo[pane.bufnr].modifiable = false
 
-  if cursor_pos[1] ~= node.index then
-    cursor_pos[1] = node.index
+  if #lines == 0 then
+    return
+  end
+
+  local cursor_line = node.index or 1
+  cursor_line = math.min(math.max(cursor_line, 1), #lines)
+  if cursor_pos[1] ~= cursor_line then
+    cursor_pos[1] = cursor_line
   end
 
   for i, child_node in ipairs(parent.children) do
+    local line = lines[i] or ""
     local hl_group = "Navbuddy" .. navic.adapt_lsp_num_to_str(child_node.kind)
     vim.hl.range(pane.bufnr, ns, hl_group, { i - 1, 0 }, { i - 1, -1 })
     if config.node_markers.enabled then
-      vim.api.nvim_buf_set_extmark(pane.bufnr, ns, i - 1, #lines[i], {
+      vim.api.nvim_buf_set_extmark(pane.bufnr, ns, i - 1, #line, {
         virt_text = {
           {
             can_expand(child_node) and config.node_markers.icons.branch
@@ -118,10 +135,10 @@ local function fill_buffer(pane, node, config)
   end
 
   vim.hl.range(pane.bufnr, ns, "NavbuddyCursorLine", { cursor_pos[1] - 1, 0 }, { cursor_pos[1] - 1, -1 })
-  vim.api.nvim_buf_set_extmark(pane.bufnr, ns, cursor_pos[1] - 1, #lines[cursor_pos[1]], {
+  vim.api.nvim_buf_set_extmark(pane.bufnr, ns, cursor_pos[1] - 1, #(lines[cursor_pos[1]] or ""), {
     end_row = cursor_pos[1],
     hl_eol = true,
-    hl_group = "NavbuddyCursorLine" .. navic.adapt_lsp_num_to_str(node.kind),
+    hl_group = "NavbuddyCursorLine" .. navic.adapt_lsp_num_to_str(node.kind or 1),
   })
   vim.api.nvim_win_set_cursor(pane.winid, cursor_pos)
 end
@@ -174,7 +191,7 @@ display.__index = display
 ---@param opts Navbuddy.display.opts|Navbuddy.display
 ---@return Navbuddy.display
 function display.new(opts)
-  local self = setmetatable({}, display --[[@as metatable]])
+  local self = setmetatable({}, display --[[@as metatable]]) --[[@as Navbuddy.display]]
   self.config = opts.config
   self.lsp_name = opts.lsp_name
   self.for_buf = opts.for_buf
@@ -356,6 +373,17 @@ function display:pop_module_trail_target(node)
   return top.origin
 end
 
+---@param node Navbuddy.symbolNode
+---@return Navbuddy.symbolNode|nil
+function display:module_trail_parent_for_display(node)
+  local top = self.module_trail[#self.module_trail]
+  if not top or (top.target ~= node and node.parent ~= top.target) then
+    return nil
+  end
+
+  return top.origin
+end
+
 function display:focus_file(node)
   local bufnr = self:ensure_node_buffer(node)
   if not bufnr then
@@ -476,7 +504,11 @@ end
 function display:redraw()
   local node = self.focus_node
   fill_buffer(self.mid, node, self.config)
-  if node.parent.is_root then
+
+  local left_node = self:module_trail_parent_for_display(node)
+  if left_node then
+    fill_buffer(self.left, left_node, self.config)
+  elseif node.parent.is_root then
     clear_buffer(self.left)
   else
     fill_buffer(self.left, node.parent, self.config)
