@@ -25,6 +25,13 @@ local function require_symbol(display)
   return display:focus_file(display.focus_node)
 end
 
+local function finish_window_action(display)
+  if display.mid and vim.api.nvim_win_is_valid(display.mid.winid) and display.state.closed == false then
+    vim.api.nvim_set_current_win(display.mid.winid)
+  end
+  display.state.leaving_window_for_action = false
+end
+
 local function redraw(display)
   display:clear_highlights()
   display:redraw()
@@ -767,16 +774,47 @@ function actions.rename()
       return
     end
     local target_win = display.for_win
-    display:close()
+    if not vim.api.nvim_win_is_valid(target_win) then
+      vim.notify("Navbuddy: source window closed before rename", vim.log.levels.WARN)
+      return
+    end
+
     if vim.api.nvim_win_get_buf(target_win) ~= bufnr then
       vim.api.nvim_win_set_buf(target_win, bufnr)
     end
     vim.api.nvim_win_set_cursor(
       target_win,
-      { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
+      clamp_cursor(
+        bufnr,
+        { display.focus_node.name_range["start"].line, display.focus_node.name_range["start"].character }
+      )
     )
+    display.state.leaving_window_for_action = true
     vim.api.nvim_set_current_win(target_win)
-    vim.lsp.buf.rename()
+
+    local ok, err = pcall(vim.ui.input, { prompt = "New Name: ", default = display.focus_node.name }, function(new_name)
+      if new_name and #new_name ~= 0 then
+        if vim.api.nvim_win_is_valid(target_win) then
+          vim.api.nvim_set_current_win(target_win)
+          local rename_ok, rename_err = pcall(vim.lsp.buf.rename, new_name)
+          vim.schedule(function()
+            finish_window_action(display)
+          end)
+          if not rename_ok then
+            error(rename_err)
+          end
+          return
+        end
+        vim.notify("Navbuddy: source window closed before rename", vim.log.levels.WARN)
+      end
+      vim.schedule(function()
+        finish_window_action(display)
+      end)
+    end)
+    if not ok then
+      finish_window_action(display)
+      error(err)
+    end
   end
 
   return {
