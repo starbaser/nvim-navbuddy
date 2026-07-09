@@ -164,7 +164,6 @@ end
 ---@field for_win_opts table<string, any>
 ---@field highlight_buf? number
 ---@field source_buffer_scrolloff? number
----@field user_gui_cursor? string
 
 ---@private
 ---@class Navbuddy.display
@@ -241,12 +240,7 @@ end
 function display:init()
   ui.highlight_setup(self.config)
 
-  if self.state.user_gui_cursor == nil then
-    self.state.user_gui_cursor = vim.o.guicursor
-  end
-  if self.state.user_gui_cursor ~= "" then
-    vim.o.guicursor = "a:NavbuddyCursor"
-  end
+  vim.wo[self.mid.winid].guicursor = "a:NavbuddyCursor"
 
   if self.config.source_buffer.scrolloff then
     self.state.source_buffer_scrolloff = vim.o.scrolloff
@@ -289,19 +283,12 @@ function display:init()
       end
     end,
   })
-  vim.api.nvim_create_autocmd("CmdlineEnter", {
+  vim.api.nvim_create_autocmd("WinClosed", {
     group = augroup,
     buffer = self.mid.bufnr,
     callback = function()
-      vim.o.guicursor = self.state.user_gui_cursor
-    end,
-  })
-  vim.api.nvim_create_autocmd("CmdlineLeave", {
-    group = augroup,
-    buffer = self.mid.bufnr,
-    callback = function()
-      if self.state.user_gui_cursor ~= "" then
-        vim.o.guicursor = "a:NavbuddyCursor"
+      if not self.state.closed then
+        self:close()
       end
     end,
   })
@@ -517,7 +504,6 @@ end
 
 function display:close()
   self.state.closed = true
-  vim.o.guicursor = self.state.user_gui_cursor
   if self.state.source_buffer_scrolloff then
     vim.o.scrolloff = self.state.source_buffer_scrolloff
   end
