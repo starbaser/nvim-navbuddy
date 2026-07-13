@@ -86,10 +86,6 @@ function ui.highlight_setup(config)
     vim.api.nvim_set_hl(0, "NavbuddyCursorLine", cursorline_def)
   end
 
-  if vim.tbl_isempty(vim.api.nvim_get_hl(0, { name = "NavbuddyCursor" })) then
-    vim.api.nvim_set_hl(0, "NavbuddyCursor", { bg = "#000000", blend = 100 })
-  end
-
   if vim.tbl_isempty(vim.api.nvim_get_hl(0, { name = "NavbuddyName" })) then
     vim.api.nvim_set_hl(0, "NavbuddyName", { link = "IncSearch" })
   end
