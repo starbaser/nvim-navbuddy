@@ -13,8 +13,7 @@
 ---
 --- - nvim-lspconfig: `https://github.com/neovim/nvim-lspconfig`
 --- - nvim-navic: `https://github.com/SmiteshP/nvim-navic`
---- - nui.nvim: `https://github.com/MunifTanjim/nui.nvim`
---- - Neovim: 0.8 or above
+--- - Neovim: 0.10 or above
 ---
 ---@text OPTIONAL REQUIREMENTS
 ---
@@ -35,7 +34,6 @@
 ---       opts = { lsp = { auto_attach = true } }
 ---       dependencies = {
 ---         "SmiteshP/nvim-navic",
----         "MunifTanjim/nui.nvim"
 ---       }
 ---     }
 ---   }
@@ -68,8 +66,17 @@
 ---   nnoremap zo :Navbuddy<cr>
 ---   nnoremap zi :Navbuddy root<cr>
 --- <
---- root~
---- Open navbuddy with root node, the first node left of current node.
+--- Subcommands (combinable):
+---   buffer~     Force buffer-scope navigation (symbols in current file only).
+---   workspace~  Force workspace-scope navigation (directory tree + lazy symbols).
+---               Errors if no LSP exposes a workspace root.
+---   root~       Open at the root node (workspace root in workspace scope,
+---               top-level symbol in buffer scope).
+---
+--- The default scope is controlled by `workspace.default_scope`. With "auto"
+--- (default), workspace is tried first and falls back to buffer on no workspace
+--- LSP. Use `:Navbuddy buffer` to opt out of workspace navigation for a single
+--- invocation.
 ---@tag :Navbuddy navbuddy-commands
 ---@toc_entry Commands
 
@@ -127,7 +134,8 @@ local workspace = require("nvim-navbuddy.workspace")
 ---     hit. Default 5000.
 ---   exclude_dirs: string[]
 ---     Directory basenames skipped during the scan. Defaults include
----     .git, node_modules, target, build, dist, etc.
+---     .git, node_modules, target, build, dist, etc. User entries are
+---     unioned with the defaults, not merged by list index.
 ---   cache: boolean
 ---     Reuse a single workspace tree across :Navbuddy invocations.
 ---     Cached per-file symbol entries are invalidated on BufWritePost
@@ -279,6 +287,13 @@ local config = {
       "build",
       "dist",
       "coverage",
+      ".venv",
+      ".nox",
+      ".tox",
+      "__pycache__",
+      ".mypy_cache",
+      ".pytest_cache",
+      ".ruff_cache",
     },
   },
   source_buffer = {
@@ -523,7 +538,17 @@ local function open_workspace(bufnr, opts, fallback)
         open_with_focus(session:closest_symbol(loaded_file, start_cursor))
       end)
     else
-      open_with_focus(first_child(root))
+      -- The anchor file may be missing from the tree (scan truncated or root
+      -- mismatch); open it as an external node instead of jumping to the
+      -- first workspace child.
+      local external = session:external_file_node_for_uri(vim.uri_from_bufnr(bufnr))
+      if external then
+        session:load_symbols(external, function(loaded_file)
+          open_with_focus(session:closest_symbol(loaded_file, start_cursor))
+        end)
+      else
+        open_with_focus(first_child(root))
+      end
     end
   end
 
@@ -613,7 +638,23 @@ function navbuddy.setup(user_config)
     end
 
     if user_config.workspace ~= nil then
+      local default_exclude_dirs = config.workspace.exclude_dirs
       config.workspace = vim.tbl_deep_extend("keep", user_config.workspace, config.workspace)
+      if user_config.workspace.exclude_dirs ~= nil then
+        -- tbl_deep_extend merges lists by index; exclude_dirs is a set, so
+        -- union user entries with the defaults instead.
+        local seen = {}
+        local union = {}
+        for _, list in ipairs({ user_config.workspace.exclude_dirs, default_exclude_dirs }) do
+          for _, name in ipairs(list) do
+            if not seen[name] then
+              seen[name] = true
+              table.insert(union, name)
+            end
+          end
+        end
+        config.workspace.exclude_dirs = union
+      end
     end
 
     if user_config.source_buffer ~= nil then

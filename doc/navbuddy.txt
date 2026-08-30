@@ -133,15 +133,16 @@ workspace: table
     when no explicit subcommand is passed. "auto" tries workspace and
     falls back to buffer if no LSP exposes a workspace root.
   max_files: integer
-    Hard cap on the breadth-first file scan. A warning is shown if hit.
-    Default 5000.
+    Hard cap on the breadth-first file scan. A warning is shown if
+    hit. Default 5000.
   exclude_dirs: string[]
-    Directory basenames skipped during the scan. Defaults include .git,
-    node_modules, target, build, dist, etc.
+    Directory basenames skipped during the scan. Defaults include
+    .git, node_modules, target, build, dist, etc. User entries are
+    unioned with the defaults, not merged by list index.
   cache: boolean
-    Reuse a single workspace tree across :Navbuddy invocations. Cached
-    per-file symbol entries are invalidated on BufWritePost of the
-    corresponding file. Default false.
+    Reuse a single workspace tree across :Navbuddy invocations.
+    Cached per-file symbol entries are invalidated on BufWritePost
+    of the corresponding file. Default false.
 
 source_buffer:
   follow_node: boolean
@@ -159,6 +160,7 @@ node_markers: table
 >lua
   ---@class Navbuddy.config
   {
+    autohide = false,
     window = {
       height = "50%",          -- Height of the navbuddy strip ("NN%" of &lines, or absolute int).
       scrolloff = nil,         -- scrolloff value inside the navbuddy MID window
@@ -205,6 +207,8 @@ node_markers: table
       [25] = "󰆕 ", -- Operator
       [26] = "󰊄 ", -- TypeParameter
       [255] = "󰉨 ",-- Macro
+      directory = "󰉋 ",
+      workspace = "󰉋 ",
     },
     use_default_mappings = true,
     -- Each Integration is auto-detected through plugin presence, however, it can
@@ -218,6 +222,7 @@ node_markers: table
     mappings = {
       ["<esc>"] = actions.close(),        -- Close and cursor to original location
       ["q"] = actions.close(),
+      ["H"] = actions.toggle_autohide(),  -- Toggle close on leaving Navbuddy
 
       ["j"] = actions.next_sibling(),     -- Go down
       ["k"] = actions.previous_sibling(), -- Go up
@@ -263,6 +268,30 @@ node_markers: table
     lsp = {
       auto_attach = false,   -- If set to true, you don't need to manually use attach function
       preference = nil,      -- List of lsp server names in order of preference
+    },
+    workspace = {
+      enabled = true,
+      default_scope = "auto",  -- "auto"|"workspace"|"buffer"
+      max_files = 5000,
+      exclude_dirs = {
+        ".git",
+        ".hg",
+        ".svn",
+        "node_modules",
+        ".direnv",
+        "result",
+        "target",
+        "build",
+        "dist",
+        "coverage",
+        ".venv",
+        ".nox",
+        ".tox",
+        "__pycache__",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+      },
     },
     source_buffer = {
       follow_node = true,    -- Keep the current node in focus on the source buffer
